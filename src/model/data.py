@@ -207,13 +207,6 @@ class SurgicalPhaseDataset(Dataset):
         return stats
 
 
-def _worker_init_fn(worker_id: int, base_seed: int = 42):
-    """Worker init at module scope to be picklable."""
-    worker_seed = base_seed + worker_id
-    random.seed(worker_seed)
-    np.random.seed(worker_seed)
-
-
 def create_dataloaders(data_dir: str,
                       batch_size: int = 1,
                       num_workers: int = 4,
@@ -268,6 +261,12 @@ def create_dataloaders(data_dir: str,
         cache_data=cache_data
     )
     
+    # worker 随机种子，保证可复现
+    def _worker_init_fn(worker_id: int):
+        worker_seed = seed + worker_id
+        random.seed(worker_seed)
+        np.random.seed(worker_seed)
+
     # 创建数据加载器
     train_loader = DataLoader(
         train_dataset,
@@ -276,7 +275,7 @@ def create_dataloaders(data_dir: str,
         num_workers=num_workers,
         pin_memory=pin_memory,
         drop_last=False,
-        worker_init_fn=(None if num_workers == 0 else lambda wid: _worker_init_fn(wid, seed))
+        worker_init_fn=_worker_init_fn
     )
     
     val_loader = DataLoader(
@@ -286,7 +285,7 @@ def create_dataloaders(data_dir: str,
         num_workers=num_workers,
         pin_memory=pin_memory,
         drop_last=False,
-        worker_init_fn=(None if num_workers == 0 else lambda wid: _worker_init_fn(wid, seed))
+        worker_init_fn=_worker_init_fn
     )
     
     test_loader = DataLoader(
@@ -296,7 +295,7 @@ def create_dataloaders(data_dir: str,
         num_workers=num_workers,
         pin_memory=pin_memory,
         drop_last=False,
-        worker_init_fn=(None if num_workers == 0 else lambda wid: _worker_init_fn(wid, seed))
+        worker_init_fn=_worker_init_fn
     )
     
     # 打印统计信息

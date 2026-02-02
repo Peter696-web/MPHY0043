@@ -335,7 +335,7 @@ def create_model(model_type: str = 'mlp', **kwargs) -> nn.Module:
     模型工厂函数
     
     Args:
-        model_type: 'mlp', 'lstm', 'transformer'
+        model_type: 'mlp', 'lstm', 'transformer', 'mstcn'
         **kwargs: 模型参数
         
     Returns:
@@ -347,6 +347,9 @@ def create_model(model_type: str = 'mlp', **kwargs) -> nn.Module:
         return LSTMSurgicalPredictor(**kwargs)
     elif model_type == 'transformer':
         return TransformerSurgicalPredictor(**kwargs)
+    elif model_type == 'mstcn':
+        from .mstcn import MSTCNSurgicalPredictor
+        return MSTCNSurgicalPredictor(**kwargs)
     else:
         raise ValueError(f"Unknown model type: {model_type}")
 
