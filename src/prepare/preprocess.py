@@ -1,303 +1,313 @@
 """
-Cholec80 Preprocessing for Surgical Phase Remaining Time Prediction
-
-Functions:
-1. Downsample 25Hz phase annotations to 1Hz video frames
-2. Generate future phase schedule labels (start_offset, duration)
-3. Support dual tasks: current phase remaining time + all future phases timeline
+数据预处理脚本
+将特征文件和标签文件合并，并按照 8:1:1 的比例分割为训练集、验证集和测试集
 """
 
-import json
+import os
 import numpy as np
 from pathlib import Path
-from typing import Dict, List, Tuple
-import pandas as pd
+from typing import Tuple, Dict
+import shutil
 
 
-# Phase mapping
-PHASE_MAPPING = {
-    'Preparation': 0,
-    'CalotTriangleDissection': 1,
-    'ClippingCutting': 2,
-    'GallbladderDissection': 3,
-    'GallbladderPackaging': 4,
-    'CleaningCoagulation': 5,
-    'GallbladderRetraction': 6
-}
+def load_feature_file(feature_path: str) -> Dict[str, np.ndarray]:
+    """
+    加载特征文件 (.npz)
+    
+    Args:
+        feature_path: 特征文件路径
+        
+    Returns:
+        包含 'tokens' 和 'frame_ids' 的字典
+    """
+    data = np.load(feature_path)
+    return {
+        'tokens': data['tokens'],
+        'frame_ids': data['frame_ids']
+    }
 
-NUM_PHASES = len(PHASE_MAPPING)
+
+def load_label_file(label_path: str) -> Dict[str, np.ndarray]:
+    """
+    加载标签文件 (.npy)
+    
+    Args:
+        label_path: 标签文件路径
+        
+    Returns:
+        包含 'phase_id' 和 'future_schedule' 的字典
+    """
+    data = np.load(label_path, allow_pickle=True).item()
+    return data
 
 
-class Cholec80Preprocessor:
-    """Cholec80 dataset preprocessor"""
+def merge_feature_and_label(video_num: int, 
+                            features_dir: str, 
+                            labels_dir: str) -> Dict[str, np.ndarray]:
+    """
+    合并单个视频的特征和标签
     
-    def __init__(self, data_root: str, output_dir: str, fps_original: int = 25, fps_target: int = 1):
-        self.data_root = Path(data_root)
-        self.output_dir = Path(output_dir)
-        self.fps_original = fps_original
-        self.fps_target = fps_target
-        self.downsample_ratio = fps_original // fps_target
+    Args:
+        video_num: 视频编号 (1-80)
+        features_dir: 特征文件夹路径
+        labels_dir: 标签文件夹路径
         
-        # Create output directories
-        (self.output_dir / 'aligned_labels').mkdir(parents=True, exist_ok=True)
-        
-    def load_phase_annotations(self, video_id: str) -> Tuple[np.ndarray, np.ndarray]:
-        """Load phase annotations from file"""
-        anno_file = self.data_root / 'phase_annotations' / f'{video_id}-phase.txt'
-        if not anno_file.exists():
-            raise FileNotFoundError(f"Annotation file not found: {anno_file}")
-        
-        # Read annotations (skip header "Frame\tPhase")
-        data = []
-        with open(anno_file, 'r') as f:
-            for line in f.readlines()[1:]:
-                parts = line.strip().split('\t')
-                if len(parts) == 2:
-                    frame_id = int(parts[0])
-                    phase_id = PHASE_MAPPING.get(parts[1], -1)
-                    data.append((frame_id, phase_id))
-        
-        frame_ids = np.array([d[0] for d in data])
-        phases = np.array([d[1] for d in data])
-        return frame_ids, phases
+    Returns:
+        合并后的数据字典
+    """
+    # 构建文件路径
+    feature_file = os.path.join(features_dir, f'video{video_num:02d}.npz')
+    label_file = os.path.join(labels_dir, f'video{video_num:02d}_labels.npy')
     
-    def downsample_labels(self, frames: np.ndarray, phases: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        """Downsample labels from 25Hz to 1Hz using majority voting"""
-        num_target_frames = len(frames) // self.downsample_ratio
-        downsampled_frames = []
-        downsampled_phases = []
-        
-        for i in range(num_target_frames):
-            start_idx = i * self.downsample_ratio
-            end_idx = start_idx + self.downsample_ratio
-            window_phases = phases[start_idx:end_idx]
-            
-            # Majority voting
-            unique, counts = np.unique(window_phases, return_counts=True)
-            majority_phase = unique[np.argmax(counts)]
-            
-            downsampled_frames.append(i + 1)  # Frame numbering starts from 1
-            downsampled_phases.append(majority_phase)
-        
-        return np.array(downsampled_frames), np.array(downsampled_phases)
+    # 检查文件是否存在
+    if not os.path.exists(feature_file):
+        raise FileNotFoundError(f"特征文件不存在: {feature_file}")
+    if not os.path.exists(label_file):
+        raise FileNotFoundError(f"标签文件不存在: {label_file}")
     
-    def extract_phase_segments(self, phases: np.ndarray) -> List[Dict]:
-        """Extract phase segments from label sequence"""
-        segments = []
-        current_phase = phases[0]
-        start_frame = 0
-        
-        for i in range(1, len(phases)):
-            if phases[i] != current_phase:
-                # Phase transition
-                segments.append({
-                    'phase_id': int(current_phase),
-                    'phase_name': [k for k, v in PHASE_MAPPING.items() if v == current_phase][0],
-                    'start_frame': int(start_frame),
-                    'end_frame': int(i - 1),
-                    'duration': int(i - start_frame)
-                })
-                current_phase = phases[i]
-                start_frame = i
-        
-        # Add last segment
-        segments.append({
-            'phase_id': int(current_phase),
-            'phase_name': [k for k, v in PHASE_MAPPING.items() if v == current_phase][0],
-            'start_frame': int(start_frame),
-            'end_frame': int(len(phases) - 1),
-            'duration': int(len(phases) - start_frame)
-        })
-        
-        return segments
+    # 加载数据
+    features = load_feature_file(feature_file)
+    labels = load_label_file(label_file)
     
-    def compute_remaining_time_labels(self, phases: np.ndarray, segments: List[Dict]) -> Dict[str, np.ndarray]:
-        """
-        Compute remaining time labels for each frame
-        
-        Returns dict with:
-            - phase_id: (N,) current phase ID
-            - future_schedule: (N, 7, 2) future phase schedule
-                [:, phase_id, 0] = seconds until start (0=ongoing, -1=completed)
-                [:, phase_id, 1] = phase duration in seconds (-1=completed)
-        """
-        num_frames = len(phases)
-        labels = {
-            'phase_id': phases.copy(),
-            'future_schedule': np.full((num_frames, NUM_PHASES, 2), -1, dtype=np.float32),
-        }
-        
-        # Frame to segment mapping
-        frame_to_segment = {}
-        for seg_idx, seg in enumerate(segments):
-            for frame in range(seg['start_frame'], seg['end_frame'] + 1):
-                frame_to_segment[frame] = seg_idx
-        
-        # Compute future schedule for each frame
-        for frame_idx in range(num_frames):
-            for phase_id in range(NUM_PHASES):
-                phase_segments = [s for s in segments if s['phase_id'] == phase_id]
-                
-                if not phase_segments:
-                    labels['future_schedule'][frame_idx, phase_id, :] = -1
-                    continue
-                
-                phase_seg = phase_segments[0]
-                
-                if frame_idx < phase_seg['start_frame']:
-                    # Future phase
-                    start_offset = phase_seg['start_frame'] - frame_idx
-                    duration = phase_seg['duration']
-                    labels['future_schedule'][frame_idx, phase_id, 0] = start_offset
-                    labels['future_schedule'][frame_idx, phase_id, 1] = duration
-                    
-                elif phase_seg['start_frame'] <= frame_idx <= phase_seg['end_frame']:
-                    # Ongoing phase
-                    remaining = phase_seg['end_frame'] - frame_idx + 1
-                    labels['future_schedule'][frame_idx, phase_id, 0] = 0
-                    labels['future_schedule'][frame_idx, phase_id, 1] = remaining
-                    
-                else:
-                    # Completed phase
-                    labels['future_schedule'][frame_idx, phase_id, :] = -1
-        
-        return labels
+    # 合并数据
+    merged_data = {
+        'video_id': video_num,
+        'tokens': features['tokens'],
+        'frame_ids': features['frame_ids'],
+        'phase_id': labels['phase_id'],
+        'future_schedule': labels['future_schedule']
+    }
     
-    def process_video(self, video_id: str, save_npy: bool = True) -> Dict:
-        """
-        Process a single video through the entire pipeline
-        
-        Args:
-            video_id: Video ID, e.g. 'video01'
-            save_npy: Whether to save as .npy file
+    # 验证数据长度一致性
+    n_frames = len(features['tokens'])
+    if len(features['frame_ids']) != n_frames:
+        print(f"警告: video{video_num:02d} frame_ids 长度不匹配")
+    if len(labels['phase_id']) != n_frames:
+        print(f"警告: video{video_num:02d} phase_id 长度不匹配")
+    
+    return merged_data
 
-        Returns:
-            result: A dictionary containing all processing results
-        """
-        print(f"\n{'='*60}")
-        print(f"process video: {video_id}")
-        print(f"{'='*60}")
-        
-        # 1. Load original labels
-        print(f"[1/4] Load original frame (25Hz)...")
-        frames_25hz, phases_25hz = self.load_phase_annotations(video_id)
-        print(f"  - Original frame: {len(frames_25hz)}")
-        print(f"  - Original Frame Range: frame {frames_25hz[0]} - {frames_25hz[-1]}")
-        
-        # 2. Downsample to 1Hz
-        print(f"[2/4] Downsample (25Hz -> 1Hz)...")
-        frames_1hz, phases_1hz = self.downsample_labels(frames_25hz, phases_25hz)
-        print(f"  - After Downsampling: {len(frames_1hz)}")
-        print(f"  - Frame Range: {frames_1hz[0]} - {frames_1hz[-1]}")
-        
-        # 3. Extract phase segments
-        print(f"[3/4] Extract phase segments...")
-        segments = self.extract_phase_segments(phases_1hz)
-        print(f"  - Phase segments: {len(segments)}")
-        for seg in segments:
-            print(f"    * {seg['phase_name']:30s} | Frames {seg['start_frame']:4d}-{seg['end_frame']:4d} | Duration: {seg['duration']:4d}")
-        
-        # 4. Compute future phase schedule labels
-        print(f"[4/4] Future Phase Schedule...")
-        labels = self.compute_remaining_time_labels(phases_1hz, segments)
-        print(f"  - Generated label dimensions:")
-        for key, value in labels.items():
-            if isinstance(value, np.ndarray):
-                print(f"    * {key:35s}: {value.shape}")
-        
-        # Build result dictionary
-        result = {
-            'video_id': video_id,
-            'num_frames': len(frames_1hz),
-            'total_duration_sec': len(frames_1hz),
-            'frame_ids': frames_1hz,
-            'segments': segments,
-            'labels': labels,
-            'metadata': {
-                'fps_original': self.fps_original,
-                'fps_target': self.fps_target,
-                'downsample_ratio': self.downsample_ratio,
-                'num_phases': NUM_PHASES,
-                'phase_mapping': PHASE_MAPPING
-            }
-        }
-        
-        # Save results
-        if save_npy:
-            self._save_results(video_id, result)
-        
-        print(f"✓ {video_id} processing complete!")
-        return result
+
+def split_dataset(total_videos: int, 
+                 train_ratio: float = 0.8, 
+                 val_ratio: float = 0.1, 
+                 test_ratio: float = 0.1) -> Tuple[list, list, list]:
+    """
+    按照指定比例分割数据集
     
-    def _save_results(self, video_id: str, result: Dict):
-        """Save processing results (JSON + NPY only)"""
-        # Save JSON (metadata + segments) for reading
-        json_output = {
-            'video_id': result['video_id'],
-            'num_frames': result['num_frames'],
-            'total_duration_sec': result['total_duration_sec'],
-            'segments': result['segments'],
-            'metadata': result['metadata']
-        }
+    Args:
+        total_videos: 总视频数量
+        train_ratio: 训练集比例
+        val_ratio: 验证集比例
+        test_ratio: 测试集比例
         
-        json_path = self.output_dir / 'aligned_labels' / f'{video_id}.json'
-        with open(json_path, 'w', encoding='utf-8') as f:
-            json.dump(json_output, f, indent=2, ensure_ascii=False)
-        print(f"  → Saved JSON: {json_path}")
-        
-        # Save labels as NPY (for training)
-        npy_path = self.output_dir / 'aligned_labels' / f'{video_id}_labels.npy'
-        np.save(npy_path, result['labels'], allow_pickle=True)
-        print(f"  → Saved NPY: {npy_path}")
+    Returns:
+        (train_videos, val_videos, test_videos) 三个列表
+    """
+    assert abs(train_ratio + val_ratio + test_ratio - 1.0) < 1e-6, \
+        "比例之和必须等于 1.0"
     
-    def process_all_videos(self, video_ids: List[str] = None):
-        """Process all videos in batch"""
-        if video_ids is None:
-            phase_dir = self.data_root / 'phase_annotations'
-            video_ids = sorted([
-                f.stem.replace('-phase', '') 
-                for f in phase_dir.glob('*-phase.txt')
-            ])
-        
-        print(f"\n{'='*60}")
-        print(f"Starting batch processing for {len(video_ids)} videos")
-        print(f"{'='*60}")
-        
-        all_results = {}
-        
-        for video_id in video_ids:
+    video_ids = list(range(1, total_videos + 1))
+    
+    n_train = int(total_videos * train_ratio)
+    n_val = int(total_videos * val_ratio)
+    
+    train_videos = video_ids[:n_train]
+    val_videos = video_ids[n_train:n_train + n_val]
+    test_videos = video_ids[n_train + n_val:]
+    
+    return train_videos, val_videos, test_videos
+
+
+def process_and_save_dataset(features_dir: str,
+                            labels_dir: str,
+                            output_dir: str,
+                            total_videos: int = 80,
+                            train_ratio: float = 0.8,
+                            val_ratio: float = 0.1,
+                            test_ratio: float = 0.1):
+    """
+    处理所有视频并保存到指定的输出目录
+    
+    Args:
+        features_dir: 特征文件夹路径
+        labels_dir: 标签文件夹路径
+        output_dir: 输出目录
+        total_videos: 总视频数量
+        train_ratio: 训练集比例
+        val_ratio: 验证集比例
+        test_ratio: 测试集比例
+    """
+    # 创建输出目录
+    train_dir = os.path.join(output_dir, 'train')
+    val_dir = os.path.join(output_dir, 'val')
+    test_dir = os.path.join(output_dir, 'test')
+    
+    for dir_path in [train_dir, val_dir, test_dir]:
+        os.makedirs(dir_path, exist_ok=True)
+        print(f"创建目录: {dir_path}")
+    
+    # 分割数据集
+    train_videos, val_videos, test_videos = split_dataset(
+        total_videos, train_ratio, val_ratio, test_ratio
+    )
+    
+    print(f"\n数据集分割:")
+    print(f"训练集: {len(train_videos)} 个视频 (video{train_videos[0]:02d} - video{train_videos[-1]:02d})")
+    print(f"验证集: {len(val_videos)} 个视频 (video{val_videos[0]:02d} - video{val_videos[-1]:02d})")
+    print(f"测试集: {len(test_videos)} 个视频 (video{test_videos[0]:02d} - video{test_videos[-1]:02d})")
+    print()
+    
+    # 处理每个分割
+    splits = {
+        'train': (train_videos, train_dir),
+        'val': (val_videos, val_dir),
+        'test': (test_videos, test_dir)
+    }
+    
+    for split_name, (video_list, save_dir) in splits.items():
+        print(f"处理 {split_name} 集...")
+        for video_num in video_list:
             try:
-                result = self.process_video(video_id, save_npy=True)
-                all_results[video_id] = result
+                # 合并特征和标签
+                merged_data = merge_feature_and_label(
+                    video_num, features_dir, labels_dir
+                )
+                
+                # 保存为 .npz 文件（压缩格式，节省空间）
+                output_file = os.path.join(save_dir, f'video{video_num:02d}.npz')
+                np.savez_compressed(output_file, **merged_data)
+                
+                print(f"  ✓ 保存 video{video_num:02d}.npz "
+                      f"(frames: {len(merged_data['tokens'])}, "
+                      f"feature_dim: {merged_data['tokens'].shape[1]})")
+                
+            except FileNotFoundError as e:
+                print(f"  ✗ 跳过 video{video_num:02d}: {e}")
             except Exception as e:
-                print(f"✗ Failed to process {video_id}: {e}")
-                continue
+                print(f"  ✗ 处理 video{video_num:02d} 时出错: {e}")
+    
+    print("\n处理完成！")
+    print_dataset_summary(output_dir)
+
+
+def print_dataset_summary(output_dir: str):
+    """
+    打印数据集摘要信息
+    
+    Args:
+        output_dir: 输出目录
+    """
+    print("\n" + "="*60)
+    print("数据集摘要")
+    print("="*60)
+    
+    for split in ['train', 'val', 'test']:
+        split_dir = os.path.join(output_dir, split)
+        if os.path.exists(split_dir):
+            files = sorted([f for f in os.listdir(split_dir) if f.endswith('.npz')])
+            print(f"\n{split.upper()} 集:")
+            print(f"  文件数量: {len(files)}")
+            print(f"  文件路径: {split_dir}")
+            if files:
+                print(f"  视频范围: {files[0]} - {files[-1]}")
+                
+                # 读取第一个文件查看数据形状
+                sample_file = os.path.join(split_dir, files[0])
+                data = np.load(sample_file)
+                print(f"  数据形状示例 ({files[0]}):")
+                for key in data.keys():
+                    print(f"    - {key}: {data[key].shape}")
+
+
+def verify_data_integrity(output_dir: str):
+    """
+    验证生成的数据完整性
+    
+    Args:
+        output_dir: 输出目录
+    """
+    print("\n" + "="*60)
+    print("数据完整性验证")
+    print("="*60)
+    
+    all_good = True
+    
+    for split in ['train', 'val', 'test']:
+        split_dir = os.path.join(output_dir, split)
+        if not os.path.exists(split_dir):
+            print(f"✗ {split} 目录不存在!")
+            all_good = False
+            continue
+            
+        files = sorted([f for f in os.listdir(split_dir) if f.endswith('.npz')])
+        print(f"\n检查 {split.upper()} 集 ({len(files)} 个文件)...")
         
-        print(f"\n{'='*60}")
-        print(f"✓ All videos processed! Success: {len(all_results)}/{len(video_ids)}")
-        print(f"{'='*60}\n")
-        
-        return all_results
+        for filename in files:
+            filepath = os.path.join(split_dir, filename)
+            try:
+                data = np.load(filepath)
+                
+                # 检查必需的键
+                required_keys = ['video_id', 'tokens', 'frame_ids', 'phase_id', 'future_schedule']
+                for key in required_keys:
+                    if key not in data:
+                        print(f"  ✗ {filename}: 缺少键 '{key}'")
+                        all_good = False
+                
+                # 检查数据长度一致性
+                n_frames = len(data['tokens'])
+                if len(data['frame_ids']) != n_frames or len(data['phase_id']) != n_frames:
+                    print(f"  ✗ {filename}: 数据长度不一致")
+                    all_good = False
+                    
+            except Exception as e:
+                print(f"  ✗ {filename}: 读取失败 - {e}")
+                all_good = False
+    
+    if all_good:
+        print("\n✓ 所有数据验证通过!")
+    else:
+        print("\n✗ 发现数据问题，请检查!")
 
 
 def main():
-    """Main function: run preprocessing"""
-    DATA_ROOT = './cholec80'
-    OUTPUT_DIR = './data/label'
+    """
+    主函数
+    """
+    # 设置路径
+    project_root = Path(__file__).parent.parent.parent
+    features_dir = project_root / 'data' / 'features' / 'dinov2-base-cls'
+    labels_dir = project_root / 'data' / 'labels' / 'aligned_labels'
+    output_dir = project_root / 'data' / 'processed'
     
-    preprocessor = Cholec80Preprocessor(
-        data_root=DATA_ROOT,
-        output_dir=OUTPUT_DIR,
-        fps_original=25,
-        fps_target=1
+    print("="*60)
+    print("数据预处理脚本")
+    print("="*60)
+    print(f"特征目录: {features_dir}")
+    print(f"标签目录: {labels_dir}")
+    print(f"输出目录: {output_dir}")
+    print()
+    
+    # 检查输入目录是否存在
+    if not features_dir.exists():
+        raise FileNotFoundError(f"特征目录不存在: {features_dir}")
+    if not labels_dir.exists():
+        raise FileNotFoundError(f"标签目录不存在: {labels_dir}")
+    
+    # 处理数据集
+    process_and_save_dataset(
+        features_dir=str(features_dir),
+        labels_dir=str(labels_dir),
+        output_dir=str(output_dir),
+        total_videos=80,
+        train_ratio=0.6,
+        val_ratio=0.2,
+        test_ratio=0.2
     )
     
-    # Process all 80 videos
-    results = preprocessor.process_all_videos()
-    
-    print("\nPreprocessing complete!")
-    print(f"Output directory: {OUTPUT_DIR}")
-    print(f"  - aligned_labels/: Aligned label files (JSON + NPY)")
+    # 验证数据完整性
+    verify_data_integrity(str(output_dir))
 
 
 if __name__ == '__main__':
