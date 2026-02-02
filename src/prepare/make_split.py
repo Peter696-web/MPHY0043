@@ -1,6 +1,6 @@
 """
 Generate train/val/test split manifest without shuffling (ordered by video number).
-Default ratio: 0.6 / 0.2 / 0.2 for 80 videos.
+Default ratio: 0.6 / 0.1 / 0.1 for 80 videos.
 Output: data/split_manifest.json
 """
 
@@ -9,8 +9,8 @@ from pathlib import Path
 import argparse
 
 
-def make_split(total_videos: int = 80, train_ratio: float = 0.6, val_ratio: float = 0.2, test_ratio: float = 0.2):
-    assert abs(train_ratio + val_ratio + test_ratio - 1.0) < 1e-6, "Ratios must sum to 1.0"
+def make_split(total_videos: int = 80, train_ratio: float = 0.75, val_ratio: float = 0.125, test_ratio: float = 0.125):
+    
 
     video_ids = [f"video{idx:02d}" for idx in range(1, total_videos + 1)]
     n_train = int(total_videos * train_ratio)
@@ -26,9 +26,9 @@ def make_split(total_videos: int = 80, train_ratio: float = 0.6, val_ratio: floa
 def main():
     parser = argparse.ArgumentParser(description="Create split manifest without shuffling")
     parser.add_argument('--total_videos', type=int, default=80)
-    parser.add_argument('--train_ratio', type=float, default=0.6)
-    parser.add_argument('--val_ratio', type=float, default=0.1)
-    parser.add_argument('--test_ratio', type=float, default=0.1)
+    parser.add_argument('--train_ratio', type=float, default=0.75)
+    parser.add_argument('--val_ratio', type=float, default=0.125)
+    parser.add_argument('--test_ratio', type=float, default=0.125)
     parser.add_argument('--output', type=str, default='data/split_manifest.json')
     args = parser.parse_args()
 
