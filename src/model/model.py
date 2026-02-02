@@ -224,18 +224,15 @@ class LSTMSurgicalPredictor(nn.Module):
         # LSTM编码
         lstm_out, _ = self.lstm(x)  # (batch, seq_len, hidden_dim * num_directions)
         
-        # 取最后一个时间步的输出
-        last_hidden = lstm_out[:, -1, :]  # (batch, hidden_dim * num_directions)
-        
-        # 分类和回归
-        phase_logits = self.phase_classifier(last_hidden)
-        schedule_flat = self.schedule_predictor(last_hidden)
-        future_schedule = schedule_flat.view(-1, self.num_phases, 2)
-        future_schedule = torch.relu(future_schedule) + 1e-6
+        # 对每个时间步输出预测
+        B, T, D = lstm_out.shape
+        phase_logits = self.phase_classifier(lstm_out.reshape(-1, D)).reshape(B, T, self.num_phases)
+        schedule_flat = self.schedule_predictor(lstm_out.reshape(-1, D)).reshape(B, T, self.num_phases, 2)
+        future_schedule = torch.relu(schedule_flat) + 1e-6
         
         return {
-            'phase_logits': phase_logits,
-            'future_schedule': future_schedule
+            'phase_logits': phase_logits,           # (B, T, num_phases)
+            'future_schedule': future_schedule      # (B, T, num_phases, 2)
         }
 
 
@@ -322,19 +319,14 @@ class TransformerSurgicalPredictor(nn.Module):
         # Transformer编码
         transformer_out = self.transformer(x)  # (batch, seq_len, hidden_dim)
         
-        # 取最后一个时间步（或全局平均池化）
-        # last_hidden = transformer_out[:, -1, :]  # 方式1
-        last_hidden = transformer_out.mean(dim=1)  # 方式2: 平均池化
-        
-        # 分类和回归
-        phase_logits = self.phase_classifier(last_hidden)
-        schedule_flat = self.schedule_predictor(last_hidden)
-        future_schedule = schedule_flat.view(-1, self.num_phases, 2)
-        future_schedule = torch.relu(future_schedule) + 1e-6
+        B, T, D = transformer_out.shape
+        phase_logits = self.phase_classifier(transformer_out.reshape(-1, D)).reshape(B, T, self.num_phases)
+        schedule_flat = self.schedule_predictor(transformer_out.reshape(-1, D)).reshape(B, T, self.num_phases, 2)
+        future_schedule = torch.relu(schedule_flat) + 1e-6
         
         return {
-            'phase_logits': phase_logits,
-            'future_schedule': future_schedule
+            'phase_logits': phase_logits,          # (B, T, num_phases)
+            'future_schedule': future_schedule     # (B, T, num_phases, 2)
         }
 
 

@@ -135,10 +135,10 @@ class SurgicalPhaseDataset(Dataset):
         video_id = int(data['video_id'])
         video_len = max(self.video_lengths[file_idx], 1)
 
-        # 整个视频序列
+        # 整个视频序列 (不截取末帧)
         features = data['tokens'].astype(np.float32)  # (T, 768)
-        phase_id = data['phase_id'][-1]  # 取序列末尾标签
-        future_schedule = data['future_schedule'][-1].astype(np.float32)  # 末帧的时间表
+        phase_id = data['phase_id'].astype(np.int64)  # (T,)
+        future_schedule = data['future_schedule'].astype(np.float32)  # (T, 7, 2)
         frame_ids = data['frame_ids'].astype(np.int64)
 
         # 特征归一化：逐帧 L2
@@ -154,8 +154,8 @@ class SurgicalPhaseDataset(Dataset):
 
         sample = {
             'features': torch.from_numpy(features),  # (T, 768)
-            'phase_id': torch.tensor(phase_id, dtype=torch.long),
-            'future_schedule': torch.from_numpy(future_schedule),
+            'phase_id': torch.from_numpy(phase_id),               # (T,)
+            'future_schedule': torch.from_numpy(future_schedule), # (T, 7, 2)
             'frame_id': torch.from_numpy(frame_ids),
             'video_id': torch.tensor(video_id, dtype=torch.long),
             'seq_len': torch.tensor(features.shape[0], dtype=torch.long)
@@ -205,6 +205,13 @@ class SurgicalPhaseDataset(Dataset):
         stats['phase_percentages'] = phase_counts / phase_counts.sum() * 100
         
         return stats
+
+
+def _worker_init_fn(worker_id: int, base_seed: int = 42):
+    """Worker init at module scope to be picklable."""
+    worker_seed = base_seed + worker_id
+    random.seed(worker_seed)
+    np.random.seed(worker_seed)
 
 
 def create_dataloaders(data_dir: str,
@@ -261,12 +268,6 @@ def create_dataloaders(data_dir: str,
         cache_data=cache_data
     )
     
-    # worker 随机种子，保证可复现
-    def _worker_init_fn(worker_id: int):
-        worker_seed = seed + worker_id
-        random.seed(worker_seed)
-        np.random.seed(worker_seed)
-
     # 创建数据加载器
     train_loader = DataLoader(
         train_dataset,
@@ -275,7 +276,7 @@ def create_dataloaders(data_dir: str,
         num_workers=num_workers,
         pin_memory=pin_memory,
         drop_last=False,
-        worker_init_fn=_worker_init_fn
+        worker_init_fn=(None if num_workers == 0 else lambda wid: _worker_init_fn(wid, seed))
     )
     
     val_loader = DataLoader(
@@ -285,7 +286,7 @@ def create_dataloaders(data_dir: str,
         num_workers=num_workers,
         pin_memory=pin_memory,
         drop_last=False,
-        worker_init_fn=_worker_init_fn
+        worker_init_fn=(None if num_workers == 0 else lambda wid: _worker_init_fn(wid, seed))
     )
     
     test_loader = DataLoader(
@@ -295,7 +296,7 @@ def create_dataloaders(data_dir: str,
         num_workers=num_workers,
         pin_memory=pin_memory,
         drop_last=False,
-        worker_init_fn=_worker_init_fn
+        worker_init_fn=(None if num_workers == 0 else lambda wid: _worker_init_fn(wid, seed))
     )
     
     # 打印统计信息

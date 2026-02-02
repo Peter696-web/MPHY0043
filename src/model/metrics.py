@@ -24,20 +24,21 @@ class MetricsCalculator:
     
     def update(self, predictions, targets):
         """Update metrics (accumulate one batch)"""
-        # Classification
-        phase_logits = predictions['phase_logits'].detach().cpu()
-        phase_pred = torch.argmax(phase_logits, dim=1).numpy()
-        phase_true = targets['phase_id'].detach().cpu().numpy()
+        # Classification (frame-level)
+        phase_logits = predictions['phase_logits'].detach().cpu()   # (B, T, num_phases)
+        B, T, _ = phase_logits.shape
+        phase_pred = torch.argmax(phase_logits, dim=2).reshape(-1).numpy()
+        phase_true = targets['phase_id'].detach().cpu().reshape(-1).numpy()
         
-        self.phase_preds.extend(phase_pred)
-        self.phase_targets.extend(phase_true)
+        self.phase_preds.extend(phase_pred.tolist())
+        self.phase_targets.extend(phase_true.tolist())
         
-        # Regression
-        pred_sched = predictions['future_schedule'].detach().cpu().numpy()
+        # Regression (frame-level, flatten time so shapes align across videos)
+        pred_sched = predictions['future_schedule'].detach().cpu().numpy()   # (B, T, 7, 2)
         true_sched = targets['future_schedule'].detach().cpu().numpy()
-        
-        self.schedule_preds.append(pred_sched)
-        self.schedule_targets.append(true_sched)
+
+        self.schedule_preds.append(pred_sched.reshape(-1, pred_sched.shape[-2], pred_sched.shape[-1]))
+        self.schedule_targets.append(true_sched.reshape(-1, true_sched.shape[-2], true_sched.shape[-1]))
     
     def compute(self):
         """Compute all metrics"""

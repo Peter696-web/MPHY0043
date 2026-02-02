@@ -12,41 +12,112 @@ from pathlib import Path
 plt.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans', 'Arial Unicode MS']
 plt.rcParams['axes.unicode_minus'] = False
 
+"""
+可视化训练历史和预测结果
+"""
+
+import json
+import torch
+import numpy as np
+import matplotlib.pyplot as plt
+from pathlib import Path
+
+# 设置中文字体
+plt.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans', 'Arial Unicode MS']
+plt.rcParams['axes.unicode_minus'] = False
+
 def plot_training_history(history_path):
-    """绘制训练历史：loss曲线"""
+    """绘制训练历史：loss和指标曲线"""
     with open(history_path, 'r') as f:
         history = json.load(f)
-
-    train_epochs = [item['epoch'] for item in history['train']]
-    train_losses = [item['losses']['total'] for item in history['train']]
-
-    val_epochs = [item['epoch'] for item in history['val']]
-    val_losses = [item['losses']['total'] for item in history['val']]
-
-    plt.figure(figsize=(12, 5))
-
-    # Loss曲线
-    plt.subplot(1, 2, 1)
-    plt.plot(train_epochs, train_losses, 'b-', label='训练集', linewidth=2)
-    plt.plot(val_epochs, val_losses, 'r-', label='验证集', linewidth=2)
-    plt.xlabel('Epoch')
-    plt.ylabel('Total Loss')
-    plt.title('训练和验证损失曲线')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-
-    # 放大后半部分
-    plt.subplot(1, 2, 2)
-    plt.plot(train_epochs[5:], train_losses[5:], 'b-', label='训练集', linewidth=2)
-    plt.plot(val_epochs[5:], val_losses[5:], 'r-', label='验证集', linewidth=2)
-    plt.xlabel('Epoch')
-    plt.ylabel('Total Loss')
-    plt.title('损失曲线（Epoch 6-14）')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-
+    
+    train_history = history['train']
+    val_history = history['val']
+    
+    epochs = [h['epoch'] for h in train_history]
+    
+    # Extract metrics
+    train_loss = [h['losses']['total'] for h in train_history]
+    val_loss = [h['losses']['total'] for h in val_history]
+    
+    train_acc = [h['metrics']['accuracy'] for h in train_history]
+    val_acc = [h['metrics']['accuracy'] for h in val_history]
+    
+    train_f1 = [h['metrics']['f1'] for h in train_history]
+    val_f1 = [h['metrics']['f1'] for h in val_history]
+    
+    train_mae = [h['metrics']['mae'] for h in train_history]
+    val_mae = [h['metrics']['mae'] for h in val_history]
+    
+    train_rmse = [h['metrics']['rmse'] for h in train_history]
+    val_rmse = [h['metrics']['rmse'] for h in val_history]
+    
+    # Create plots
+    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+    fig.suptitle('训练历史 - 帧级手术阶段预测', fontsize=16)
+    
+    # Loss
+    axes[0, 0].plot(epochs, train_loss, 'b-', label='训练集')
+    axes[0, 0].plot(epochs, val_loss, 'r-', label='验证集')
+    axes[0, 0].set_title('总损失')
+    axes[0, 0].set_xlabel('Epoch')
+    axes[0, 0].set_ylabel('Loss')
+    axes[0, 0].legend()
+    axes[0, 0].grid(True, alpha=0.3)
+    
+    # Accuracy
+    axes[0, 1].plot(epochs, train_acc, 'b-', label='训练集')
+    axes[0, 1].plot(epochs, val_acc, 'r-', label='验证集')
+    axes[0, 1].set_title('准确率')
+    axes[0, 1].set_xlabel('Epoch')
+    axes[0, 1].set_ylabel('Accuracy')
+    axes[0, 1].legend()
+    axes[0, 1].grid(True, alpha=0.3)
+    
+    # F1 Score
+    axes[0, 2].plot(epochs, train_f1, 'b-', label='训练集')
+    axes[0, 2].plot(epochs, val_f1, 'r-', label='验证集')
+    axes[0, 2].set_title('宏平均 F1 分数')
+    axes[0, 2].set_xlabel('Epoch')
+    axes[0, 2].set_ylabel('F1')
+    axes[0, 2].legend()
+    axes[0, 2].grid(True, alpha=0.3)
+    
+    # MAE
+    axes[1, 0].plot(epochs, train_mae, 'b-', label='训练集')
+    axes[1, 0].plot(epochs, val_mae, 'r-', label='验证集')
+    axes[1, 0].set_title('MAE (回归)')
+    axes[1, 0].set_xlabel('Epoch')
+    axes[1, 0].set_ylabel('MAE')
+    axes[1, 0].legend()
+    axes[1, 0].grid(True, alpha=0.3)
+    
+    # RMSE
+    axes[1, 1].plot(epochs, train_rmse, 'b-', label='训练集')
+    axes[1, 1].plot(epochs, val_rmse, 'r-', label='验证集')
+    axes[1, 1].set_title('RMSE (回归)')
+    axes[1, 1].set_xlabel('Epoch')
+    axes[1, 1].set_ylabel('RMSE')
+    axes[1, 1].legend()
+    axes[1, 0].grid(True, alpha=0.3)
+    
+    # Validation Score
+    val_scores = [h.get('score', 0) for h in val_history]
+    axes[1, 2].plot(epochs, val_scores, 'g-', label='验证分数')
+    axes[1, 2].set_title('验证分数 (F1 + RMSE)')
+    axes[1, 2].set_xlabel('Epoch')
+    axes[1, 2].set_ylabel('Score')
+    axes[1, 2].legend()
+    axes[1, 2].grid(True, alpha=0.3)
+    
     plt.tight_layout()
-    plt.savefig('results/figures/training_loss.png', dpi=300, bbox_inches='tight')
+    
+    # Save
+    save_path = Path('results/figures')
+    save_path.mkdir(parents=True, exist_ok=True)
+    fig.savefig(save_path / 'training_history.png', dpi=300, bbox_inches='tight')
+    fig.savefig(save_path / 'training_history.pdf', bbox_inches='tight')
+    print(f"保存图表到 {save_path / 'training_history.png'} 和 .pdf")
     plt.show()
 
 def plot_time_predictions(predictions_path, max_videos=5):

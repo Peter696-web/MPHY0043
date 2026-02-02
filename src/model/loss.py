@@ -41,12 +41,19 @@ class MultiTaskLoss(nn.Module):
         Returns:
             dict with 'total', 'classification', 'regression'
         """
-        # Classification loss
-        loss_cls = self.ce_loss(predictions['phase_logits'], targets['phase_id'])
+        # reshape to (B*T, ...)
+        phase_logits = predictions['phase_logits']   # (B, T, num_phases)
+        phase_targets = targets['phase_id']          # (B, T)
+        B, T, _ = phase_logits.shape
+
+        loss_cls = self.ce_loss(
+            phase_logits.reshape(B * T, -1),
+            phase_targets.reshape(B * T)
+        )
         
         # Regression loss (only compute on valid positions)
-        pred_sched = predictions['future_schedule']
-        true_sched = targets['future_schedule']
+        pred_sched = predictions['future_schedule']           # (B, T, num_phases, 2)
+        true_sched = targets['future_schedule']               # (B, T, num_phases, 2)
         valid_mask = (true_sched >= 0).float()
         
         mse = ((pred_sched - true_sched.clamp(min=0)) ** 2) * valid_mask
