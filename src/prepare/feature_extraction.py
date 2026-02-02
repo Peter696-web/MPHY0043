@@ -21,6 +21,7 @@
 # ------------------------------------------------------------
 import os
 import argparse
+import json
 from pathlib import Path
 
 import numpy as np
@@ -59,94 +60,56 @@ def extract_number(file_name):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--dataset', type=str, choices=['rarp50', 'vvs', 'tme', 'cholec80'], default='cholec80', help='Dataset to use for feature extraction')
     ap.add_argument('--data_root', type=str, default='./cholec80', help='Root directory of the dataset')
     ap.add_argument('--output_dir', type=str, default='./data/features', help='Output directory for features')
     ap.add_argument("--batch_size", type=int, default=16)
     ap.add_argument("--models", nargs="+",
                     default=["base"],
-                    help="选择 dinov2 版本: base large giant")
+                    help="choose dinov2 variant: base large giant")
     ap.add_argument("--cpu_fallback", default=True, action="store_true",
-                    help="显存不足时是否转用 CPU 进行推断")
+                    help="fallback to CPU when GPU memory is insufficient")
     ap.add_argument("--video_ids", nargs="+", default=None,
-                    help="指定处理的视频ID，如 video01 video02，默认处理所有")
+                    help="specify video IDs, e.g., video01 video02; defaults to all")
+    ap.add_argument('--split_manifest', type=str, default=None,
+                    help='Path to split_manifest.json; if provided, only process listed videos and place outputs under train/val/test subfolders')
     args = ap.parse_args()
 
     vids = [] #dir paths of each video
     vid_names = [] #video names
+    vid_split = {}  # video_name -> split
+    allowed = None
+    if args.split_manifest:
+        with open(args.split_manifest, 'r') as f:
+            manifest = json.load(f)
+        allowed = set(manifest.get('train', []) + manifest.get('val', []) + manifest.get('test', []))
+        for name in manifest.get('train', []):
+            vid_split[name] = 'train'
+        for name in manifest.get('val', []):
+            vid_split[name] = 'val'
+        for name in manifest.get('test', []):
+            vid_split[name] = 'test'
     
-    if args.dataset == "cholec80":
-        # Cholec80 数据集路径结构
-        root = args.data_root
-        frames_dir = os.path.join(root, "frames")
-        
-        if not os.path.exists(frames_dir):
-            raise FileNotFoundError(f"Frames directory not found: {frames_dir}")
-        
-        # 获取所有视频文件夹
-        if args.video_ids:
-            # 处理指定的视频
-            for vid in args.video_ids:
-                vid_path = os.path.join(frames_dir, vid)
-                if os.path.isdir(vid_path):
-                    vids.append(vid_path)
-                    vid_names.append(vid)
-                else:
-                    print(f"[Warning] Video directory not found: {vid_path}")
+    # Cholec80 only
+    root = args.data_root
+    frames_dir = os.path.join(root, "frames")
+    
+    if not os.path.exists(frames_dir):
+        raise FileNotFoundError(f"Frames directory not found: {frames_dir}")
+    
+    target_list = args.video_ids if args.video_ids else sorted([item for item in os.listdir(frames_dir) if item.startswith('video') and not item.startswith('.')])
+    for vid in target_list:
+        if allowed is not None and vid not in allowed:
+            continue
+        vid_path = os.path.join(frames_dir, vid)
+        if os.path.isdir(vid_path):
+            vids.append(vid_path)
+            vid_names.append(vid)
         else:
-            # 处理所有视频（video01-video80）
-            for item in sorted(os.listdir(frames_dir)):
-                if item.startswith('video') and not item.startswith('.'):
-                    item_path = os.path.join(frames_dir, item)
-                    if os.path.isdir(item_path):
-                        vids.append(item_path)
-                        vid_names.append(item)
-        
-        print(f"[Info] Found {len(vids)} videos to process: {vid_names[:5]}{'...' if len(vid_names) > 5 else ''}")
-        
-    elif args.dataset == "rarp50":
-        root = "/home/rmapchb/Reserch/data/rarp50_data/"
-        for category in ['train', 'test']:
-            category_path = os.path.join(root, category)
-            # Check if the directory exists
-            if os.path.exists(category_path):
-                for item in os.listdir(category_path):
-                    item_path = os.path.join(category_path, item)
-                    if os.path.isdir(item_path):
-                        vids.append(item_path)
-                        vid_names.append(item)
-    elif args.dataset == "vvs":
-        root = "/home/rmapchb/Reserch/data/raw/frames/"
-        for item in os.listdir(root):
-            # 只处理文件夹
-            if item.startswith('.'):
-                continue
-            else:
-                item_path = os.path.join(root, item)
-                if os.path.isdir(item_path):
-                    vids.append(item_path)
-                    vid_names.append(item)
-    elif args.dataset == "tme":
-        root = "/media/HDD1/jialang/Error_Detection/15TME_video_select/"
-        for item in os.listdir(root):
-            # 只处理文件夹
-            if item.startswith('.'):
-                continue
-            else:
-                item_path = os.path.join(root, item)
-                if os.path.isdir(item_path):
-                    vids.append(item_path)
-                    vid_names.append(item)
+            print(f"[Warning] Video directory not found: {vid_path}")
     
-    # 设置输出目录
-    if args.dataset == "cholec80":
-        output_dir = args.output_dir
-    elif args.dataset == "rarp50":
-        output_dir = "/media/HDD1/jialang/CMLSED/Data/rarp50_token"
-    elif args.dataset == "vvs":
-        output_dir = "/home/rmapchb/Reserch/data/raw/"
-    elif args.dataset == "tme":
-        output_dir = "/media/HDD1/jialang/CMLSED/Data/tme_token"
+    print(f"[Info] Found {len(vids)} videos to process: {vid_names[:5]}{'...' if len(vid_names) > 5 else ''}")
+    
+    output_dir = args.output_dir
     
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -177,15 +140,8 @@ def main():
             vid_name = vid_names[i]
             
             # 根据数据集获取所有图片
-            if args.dataset == "cholec80":
-                # Cholec80: 直接在视频文件夹下，文件名格式 video01_000001.png
-                frames = glob.glob(os.path.join(vids[i], "*.png"))
-            elif args.dataset == "rarp50":
-                frames = glob.glob(vids[i]+"/frame_10HZ/" + r"/*.png")
-            elif args.dataset == "vvs":
-                frames = glob.glob(vids[i]+"/frame_10HZ/" + r"/*.png")
-            elif args.dataset == "tme":
-                frames = glob.glob(vids[i]+"/frame_10HZ/" + r"/*.jpg")
+            # Cholec80: frames stored as videoXX_000001.png directly under the video folder
+            frames = glob.glob(os.path.join(vids[i], "*.png"))
             
             # sort the frames
             frames = sorted(frames, key=extract_number)
@@ -223,8 +179,12 @@ def main():
                 'frame_ids': frame_ids
             }
             tag = id_map[m].split("/")[-1] + '-cls'              # dinov2-small, dinov2-base ...
-            save_tokens(out_dir / tag / f"{vid_name}", data_dict)
-            print(f"[Saved] tokens: {token_tensor.shape}, frame_ids: {frame_ids.shape} →  {out_dir / tag / f'{vid_name}.npy'}")
+            split_subdir = vid_split.get(vid_name, None)
+            save_path = out_dir / tag
+            if split_subdir:
+                save_path = save_path / split_subdir
+            save_tokens(save_path / f"{vid_name}", data_dict)
+            print(f"[Saved] tokens: {token_tensor.shape}, frame_ids: {frame_ids.shape} →  {save_path / (vid_name + '.npz')}")
 
     print(f"\n[Done] {args.dataset} {args.models} tokens extraction finished.")
 
