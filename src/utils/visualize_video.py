@@ -3,6 +3,8 @@ Enhanced Visualization for Surgical Phase Prediction
 Visualize predictions vs ground truth with triangle effect (remaining time)
 """
 
+import matplotlib
+matplotlib.use('TkAgg')  # Use TkAgg backend for displaying plots
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
@@ -80,7 +82,7 @@ def extract_video_predictions(pred_data, video_id):
     return None
 
 
-def plot_triangle_visualization(video_data, video_len, label_data, save_path):
+def plot_triangle_visualization(video_data, video_len, label_data, save_path, show=True):
     """
     Create triangle visualization - Current Phase Remaining Time
     Shows the remaining time for the current phase at each timestep
@@ -164,9 +166,11 @@ def plot_triangle_visualization(video_data, video_len, label_data, save_path):
     plt.tight_layout()
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     print(f"✅ Saved triangle visualization: {save_path}")
+    if show:
+        plt.show()  # Display the plot
     plt.close()
 
-def plot_phase_comparison(video_data, video_len, label_data, save_path):
+def plot_phase_comparison(video_data, video_len, label_data, save_path, show=True):
     """
     Plot phase classification: prediction vs ground truth
     """
@@ -228,6 +232,8 @@ def plot_phase_comparison(video_data, video_len, label_data, save_path):
     plt.tight_layout()
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     print(f"✅ Saved phase classification: {save_path}")
+    if show:
+        plt.show()  # Display the plot
     plt.close()
 
 
@@ -264,7 +270,12 @@ def main():
                         help='Directory with label JSON files')
     parser.add_argument('--save_dir', type=str, default=None,
                         help='Output directory (default: same as pred_path)')
+    parser.add_argument('--no-show', action='store_true', default=False,
+                        help='Do not show plots on screen (only save to file)')
     args = parser.parse_args()
+    
+    # Set show flag (default: True, unless --no-show is specified)
+    args.show = not args.no_show
     
     global video_id
     video_id = args.video_id
@@ -325,11 +336,11 @@ def main():
     
     # Triangle visualization (main)
     triangle_path = save_dir / f'video{video_id:02d}_remaining_time_triangles.png'
-    plot_triangle_visualization(video_data, video_len, label_data, triangle_path)
+    plot_triangle_visualization(video_data, video_len, label_data, triangle_path, args.show)
     
     # Phase classification
     phase_path = save_dir / f'video{video_id:02d}_phase_classification.png'
-    plot_phase_comparison(video_data, video_len, label_data, phase_path)
+    plot_phase_comparison(video_data, video_len, label_data, phase_path, args.show)
     
     print(f"\n✅ All plots saved to: {save_dir}")
 

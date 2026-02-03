@@ -13,8 +13,8 @@ from typing import Dict, List
 
 class DilatedResidualLayer(nn.Module):
     """
-    单个膨胀残差卷积层
-    使用膨胀卷积扩大感受野，残差连接稳定训练
+    Single dilated residual convolutional layer
+    Uses dilated convolution to expand receptive field, residual connection for stable training
     """
     
     def __init__(self, d_in, d_out, kernel_size=3, dilation=1, dropout=0.3):
@@ -33,30 +33,30 @@ class DilatedResidualLayer(nn.Module):
         out = F.relu(self.conv_dilated(x))
         out = self.conv_1x1(out)
         out = self.dropout(out)
-        return x + out  # 残差连接
+        return x + out  # Residual connection
 
 
 class SingleStageModel(nn.Module):
     """
-    MS-TCN 的单阶段模型
-    由多层膨胀卷积堆叠而成，每层膨胀率翻倍
+    MS-TCN single stage model
+    Composed of multiple stacked dilated convolutional layers with doubling dilation rates
     """
     
     def __init__(self, num_layers, num_f_maps, dim, num_classes, dropout=0.3):
         """
         Args:
-            num_layers: 卷积层数（控制感受野大小）
-            num_f_maps: 特征图数量（通道数）
-            dim: 输入特征维度
-            num_classes: 输出类别数
-            dropout: Dropout 比例
+            num_layers: Number of convolutional layers (controls receptive field size)
+            num_f_maps: Number of feature maps (channels)
+            dim: Input feature dimension
+            num_classes: Number of output classes
+            dropout: Dropout ratio
         """
         super().__init__()
         
-        # 输入投影
+        # Input projection
         self.conv_in = nn.Conv1d(dim, num_f_maps, 1)
         
-        # 膨胀卷积层（膨胀率：1, 2, 4, 8, ...）
+        # Dilated convolutional layers (dilation rates: 1, 2, 4, 8, ...)
         self.layers = nn.ModuleList([
             DilatedResidualLayer(
                 num_f_maps, num_f_maps,
@@ -67,15 +67,15 @@ class SingleStageModel(nn.Module):
             for i in range(num_layers)
         ])
         
-        # 输出投影
+        # Output projection
         self.conv_out = nn.Conv1d(num_f_maps, num_classes, 1)
         
     def forward(self, x):
         """
         Args:
-            x: (B, C_in, T) 输入特征
+            x: (B, C_in, T) Input features
         Returns:
-            out: (B, num_classes, T) 分类 logits
+            out: (B, num_classes, T) Classification logits
         """
         out = self.conv_in(x)
         for layer in self.layers:
@@ -86,10 +86,10 @@ class SingleStageModel(nn.Module):
 
 class MSTCN(nn.Module):
     """
-    MS-TCN++: 多阶段时序卷积网络
+    MS-TCN++: Multi-Stage Temporal Convolutional Network
     
-    第一阶段：从原始特征预测
-    后续阶段：从前一阶段的 softmax 输出细化预测（coarse-to-fine）
+    Stage 1: Predict from original features
+    Subsequent stages: Refine predictions from previous stage's softmax output (coarse-to-fine)
     """
     
     def __init__(self,
@@ -101,24 +101,24 @@ class MSTCN(nn.Module):
                  dropout=0.3):
         """
         Args:
-            num_stages: 细化阶段数（越多越精细，但计算量大）
-            num_layers: 每阶段的卷积层数
-            num_f_maps: 特征图数量
-            feature_dim: 输入特征维度
-            num_classes: 阶段类别数
-            dropout: Dropout 比例
+            num_stages: Number of refinement stages (more stages = finer but more computation)
+            num_layers: Number of convolutional layers per stage
+            num_f_maps: Number of feature maps
+            feature_dim: Input feature dimension
+            num_classes: Number of phase classes
+            dropout: Dropout ratio
         """
         super().__init__()
         
         self.num_stages = num_stages
         self.num_classes = num_classes
         
-        # Stage 1: 从原始特征预测
+        # Stage 1: Predict from original features
         self.stage1 = SingleStageModel(
             num_layers, num_f_maps, feature_dim, num_classes, dropout
         )
         
-        # Stage 2-N: 从前一阶段的 softmax 输出细化
+        # Stage 2-N: Refine from previous stage's softmax output
         self.stages = nn.ModuleList([
             SingleStageModel(
                 num_layers, num_f_maps, num_classes, num_classes, dropout
@@ -129,11 +129,11 @@ class MSTCN(nn.Module):
     def forward(self, x):
         """
         Args:
-            x: (B, T, feature_dim) 输入特征序列
+            x: (B, T, feature_dim) Input feature sequence
         Returns:
-            outputs: list of (B, T, num_classes)，每个元素对应一个阶段的预测
+            outputs: list of (B, T, num_classes), each element corresponds to one stage's prediction
         """
-        # 转为卷积格式：(B, T, C) -> (B, C, T)
+        # Convert to conv format: (B, T, C) -> (B, C, T)
         x = x.permute(0, 2, 1)
         
         # Stage 1
@@ -142,11 +142,11 @@ class MSTCN(nn.Module):
         
         # Stage 2-N (refinement stages)
         for stage in self.stages:
-            # 用前一阶段的 softmax 输出作为输入
+            # Use previous stage's softmax output as input
             out = stage(F.softmax(out, dim=1))
             outputs.append(out)
         
-        # 转回：(B, num_classes, T) -> (B, T, num_classes)
+        # Convert back: (B, num_classes, T) -> (B, T, num_classes)
         outputs = [o.permute(0, 2, 1) for o in outputs]
         
         return outputs
@@ -154,10 +154,10 @@ class MSTCN(nn.Module):
 
 class MSTCNSurgicalPredictor(nn.Module):
     """
-    MS-TCN++ 用于手术阶段预测（多任务：分类 + 回归）
+    MS-TCN++ for surgical phase prediction (multi-task: classification + regression)
     
-    分类任务：使用 MS-TCN 主干
-    回归任务：从最后阶段特征预测 future_schedule
+    Classification task: Use MS-TCN backbone
+    Regression task: Predict future_schedule from final stage features
     """
     
     def __init__(self,
@@ -169,19 +169,19 @@ class MSTCNSurgicalPredictor(nn.Module):
                  num_phases: int = 7):
         """
         Args:
-            feature_dim: 输入特征维度（DINOv2: 768）
-            hidden_dim: MS-TCN 内部特征图数量
-            num_stages: 细化阶段数
-            num_layers: 每阶段卷积层数
-            dropout: Dropout 比例
-            num_phases: 阶段类别数
+            feature_dim: Input feature dimension (DINOv2: 768)
+            hidden_dim: MS-TCN internal feature map count
+            num_stages: Number of refinement stages
+            num_layers: Number of convolutional layers per stage
+            dropout: Dropout ratio
+            num_phases: Number of phase classes
         """
         super().__init__()
         
         self.num_phases = num_phases
         self.num_stages = num_stages
         
-        # MS-TCN 主干（阶段分类）
+        # MS-TCN backbone (phase classification)
         self.mstcn = MSTCN(
             num_stages=num_stages,
             num_layers=num_layers,
@@ -191,9 +191,9 @@ class MSTCNSurgicalPredictor(nn.Module):
             dropout=dropout
         )
         
-        # 回归分支：从视觉特征 + 阶段概率 + 时间特征预测 future_schedule
-        # 方案C+ (阶段感知 + 时间特征) - 恢复此版本，效果更好
-        # 输入维度：feature_dim + num_phases + 1 (视觉特征 + 阶段概率 + 全局时间)
+        # Regression branch: Predict future_schedule from visual features + phase probs + time features
+        # Solution C+ (phase-aware + time features) - restored this version, works better
+        # Input dimension: feature_dim + num_phases + 1 (visual features + phase probs + global time)
         self.regression_branch = nn.Sequential(
             nn.Conv1d(feature_dim + num_phases + 1, hidden_dim, 1),  # 768 + 7 + 1 = 776
             nn.ReLU(),
@@ -206,37 +206,37 @@ class MSTCNSurgicalPredictor(nn.Module):
         
     def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
         """
-        前向传播（方案C+：阶段感知 + 时间特征）
+        Forward pass (Solution C+: phase-aware + time features)
         
-        核心：回归分支使用阶段概率，帮助理解手术流程和阶段顺序
+        Core: Regression branch uses phase probabilities to help understand surgical flow and phase ordering
         
         Args:
-            x: (B, T, feature_dim) 输入特征序列
+            x: (B, T, feature_dim) Input feature sequence
             
         Returns:
             dict with keys:
-                - phase_logits: (B, T, num_phases) 最终阶段分类 logits
-                - future_schedule: (B, T, num_phases, 2) 未来时间表预测
-                - stage_outputs: list of (B, T, num_phases) 各阶段的预测（用于多阶段监督）
+                - phase_logits: (B, T, num_phases) Final stage phase classification logits
+                - future_schedule: (B, T, num_phases, 2) Future schedule prediction
+                - stage_outputs: list of (B, T, num_phases) Predictions from each stage (for multi-stage supervision)
         """
         B, T, C = x.shape
         
-        # MS-TCN 分类（多阶段输出）
+        # MS-TCN classification (multi-stage outputs)
         stage_outputs = self.mstcn(x)  # list of (B, T, num_phases)
         
-        # 获取最终阶段的分类概率
+        # Get final stage classification probabilities
         phase_logits = stage_outputs[-1]  # (B, T, num_phases)
         phase_probs = F.softmax(phase_logits, dim=-1)  # (B, T, num_phases)
         
-        # 方案C+核心：添加时间特征
-        # 1. 全局时间位置: t/T (归一化的时间戳)
+        # Solution C+ core: Add time features
+        # 1. Global time position: t/T (normalized timestamp)
         time_pos = torch.arange(T, device=x.device, dtype=torch.float32).unsqueeze(0).unsqueeze(-1) / T  # (1, T, 1)
         time_pos = time_pos.expand(B, -1, -1)  # (B, T, 1)
         
-        # 合并: 视觉特征 + 阶段概率 + 时间位置
+        # Combine: visual features + phase probabilities + time position
         combined_features = torch.cat([x, phase_probs, time_pos], dim=-1)  # (B, T, 768+7+1=776)
         
-        # 回归分支（从合并特征预测）
+        # Regression branch (predict from combined features)
         combined_1d = combined_features.permute(0, 2, 1)  # (B, 776, T)
         schedule_flat = self.regression_branch(combined_1d)  # (B, num_phases*2, T)
         schedule_flat = schedule_flat.permute(0, 2, 1)  # (B, T, num_phases*2)
@@ -244,31 +244,31 @@ class MSTCNSurgicalPredictor(nn.Module):
         future_schedule = torch.relu(future_schedule) + 1e-6
         
         return {
-            'phase_logits': phase_logits,           # 最后阶段的预测
+            'phase_logits': phase_logits,           # Final stage predictions
             'future_schedule': future_schedule,
-            'stage_outputs': stage_outputs          # 用于计算多阶段损失
+            'stage_outputs': stage_outputs          # For multi-stage loss computation
         }
 
 
 # ============================================================================
-# 测试代码
+# Test code
 # ============================================================================
 
 def test_mstcn():
-    """测试 MS-TCN 模型"""
+    """Test MS-TCN model"""
     print("="*70)
-    print("测试 MS-TCN++ 模型")
+    print("Testing MS-TCN++ Model")
     print("="*70)
     
-    # 模拟输入
+    # Simulate input
     batch_size = 2
-    seq_len = 500  # 一个视频约 500-3000 帧
+    seq_len = 500  # A video is about 500-3000 frames
     feature_dim = 768
     num_phases = 7
     
     x = torch.randn(batch_size, seq_len, feature_dim)
     
-    # 创建模型
+    # Create model
     model = MSTCNSurgicalPredictor(
         feature_dim=feature_dim,
         hidden_dim=64,
@@ -277,17 +277,17 @@ def test_mstcn():
         num_phases=num_phases
     )
     
-    # 前向传播
+    # Forward pass
     outputs = model(x)
     
-    print(f"\n输入: {x.shape}")
-    print(f"阶段分类 logits: {outputs['phase_logits'].shape}")
-    print(f"未来时间表: {outputs['future_schedule'].shape}")
-    print(f"所有阶段预测: {[o.shape for o in outputs['stage_outputs']]}")
-    print(f"模型参数量: {sum(p.numel() for p in model.parameters()):,}")
+    print(f"\nInput: {x.shape}")
+    print(f"Phase classification logits: {outputs['phase_logits'].shape}")
+    print(f"Future schedule: {outputs['future_schedule'].shape}")
+    print(f"All stage predictions: {[o.shape for o in outputs['stage_outputs']]}")
+    print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
     
-    # 测试感受野
-    print(f"\n理论感受野: ~{2**(10+1) * 3} 帧（约 {2**(10+1)*3/25:.1f} 秒 @ 25fps）")
+    # Test receptive field
+    print(f"\nTheoretical receptive field: ~{2**(10+1) * 3} frames (about {2**(10+1)*3/25:.1f} seconds @ 25fps)")
     
     print("="*70)
 

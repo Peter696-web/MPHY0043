@@ -1,22 +1,22 @@
 #!/usr/bin/env python
 # feature_extraction.py
 # ------------------------------------------------------------
-# 批量提取 DINOv2 small/base/large/giant 的 CLS+patch token
-# 并合并保存为 .npy：(N, 1+P, C) 或只保存 CLS token (N, C)
+# Batch extract DINOv2 small/base/large/giant CLS+patch tokens
+# and merge save as .npy: (N, 1+P, C) or save only CLS token (N, C)
 # ------------------------------------------------------------
-# 使用示例:
-# 
-# Cholec80 数据集:
-# 1. 处理所有视频:
+# Usage examples:
+#
+# Cholec80 dataset:
+# 1. Process all videos:
 #    python feature_extraction.py --dataset cholec80 --models base
-# 
-# 2. 处理指定视频:
+#
+# 2. Process specified videos:
 #    python feature_extraction.py --dataset cholec80 --models base --video_ids video01 video02 video03
 #
-# 3. 使用多个模型:
+# 3. Use multiple models:
 #    python feature_extraction.py --dataset cholec80 --models base large giant
 #
-# 4. 自定义路径:
+# 4. Custom paths:
 #    python feature_extraction.py --dataset cholec80 --data_root ./cholec80 --output_dir ./data/features
 # ------------------------------------------------------------
 import os
@@ -33,7 +33,7 @@ import re
 import glob
 
 
-# ---------- 工具函数 ----------
+# ---------- Utility functions ----------
 def load_img(p: Path):
     return Image.open(p).convert("RGB")
 
@@ -46,8 +46,8 @@ def save_tokens(out_path: Path, data):
     out_path.parent.mkdir(parents=True, exist_ok=True)
     if isinstance(data, dict):
         # Save as .npz file for dictionary data
-        np.savez(out_path.with_suffix(".npz"), 
-                 tokens=data['tokens'].numpy(), 
+        np.savez(out_path.with_suffix(".npz"),
+                 tokens=data['tokens'].numpy(),
                  frame_ids=data['frame_ids'].numpy())
     else:
         # Save as .npy file for tensor data
@@ -88,14 +88,14 @@ def main():
             vid_split[name] = 'val'
         for name in manifest.get('test', []):
             vid_split[name] = 'test'
-    
+
     # Cholec80 only
     root = args.data_root
     frames_dir = os.path.join(root, "frames")
-    
+
     if not os.path.exists(frames_dir):
         raise FileNotFoundError(f"Frames directory not found: {frames_dir}")
-    
+
     target_list = args.video_ids if args.video_ids else sorted([item for item in os.listdir(frames_dir) if item.startswith('video') and not item.startswith('.')])
     for vid in target_list:
         if allowed is not None and vid not in allowed:
@@ -106,11 +106,11 @@ def main():
             vid_names.append(vid)
         else:
             print(f"[Warning] Video directory not found: {vid_path}")
-    
+
     print(f"[Info] Found {len(vids)} videos to process: {vid_names[:5]}{'...' if len(vid_names) > 5 else ''}")
-    
+
     output_dir = args.output_dir
-    
+
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -123,13 +123,13 @@ def main():
     device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
     for m in args.models:
         print(f"\n=== {id_map[m]} ===")
-        # 载入模型
+        # Load model
         processor = AutoImageProcessor.from_pretrained(id_map[m], size={"height": 224, "width": 224}, do_center_crop=False)
         try:
             model = AutoModel.from_pretrained(id_map[m]).to(device)
         except RuntimeError as e:
             if args.cpu_fallback:
-                print(f"[Warn] 显存不足，转用 CPU: {e}")
+                print(f"[Warn] Insufficient GPU memory, switching to CPU: {e}")
                 device = torch.device("cpu")
                 model = AutoModel.from_pretrained(id_map[m]).to(device)
             else:
@@ -138,19 +138,19 @@ def main():
 
         for i in range(len(vids)):
             vid_name = vid_names[i]
-            
-            # 根据数据集获取所有图片
+
+            # Get all images according to dataset
             # Cholec80: frames stored as videoXX_000001.png directly under the video folder
             frames = glob.glob(os.path.join(vids[i], "*.png"))
-            
+
             # sort the frames
             frames = sorted(frames, key=extract_number)
             N = len(frames)
-            
+
             if N == 0:
                 print(f"[Warning] No frames found in {vids[i]}")
                 continue
-                
+
             token_list = []  # Use list to collect tensors
             frame_id_list = []  # Collect frame IDs
 
@@ -166,13 +166,13 @@ def main():
                 with torch.no_grad():
                     tokens = model(pixel_values=x).last_hidden_state.float().cpu()  # (B, 1+P, C)
                     tokens = tokens[:, 0, :]  # Keep only the CLS token (C)
-                    
+
                 token_list.append(tokens)
 
             # Concatenate all tokens into a single tensor
             token_tensor = torch.cat(token_list, dim=0)  # (N, C)
             frame_ids = torch.tensor(frame_id_list)  # (N,)
-            
+
             # Save both tokens and frame IDs
             data_dict = {
                 'tokens': token_tensor,

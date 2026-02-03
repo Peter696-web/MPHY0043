@@ -21,6 +21,7 @@ import numpy as np
 from model.data import create_dataloaders
 from model.loss import MultiTaskLoss
 from model.metrics import MetricsCalculator
+from model.mstcn import MSTCNSurgicalPredictor
 
 
 class Trainer:
@@ -67,28 +68,20 @@ class Trainer:
     
     def _build_model(self):
         """Build model"""
-        # Select model class based on config
-        model_type = self.config.get('model_type', 'lstm')
+        # Only use MS-TCN++ model
+        model_type = self.config.get('model_type', 'mstcn')
 
-        if model_type == 'lstm':
-            from model.model import LSTMSurgicalPredictor
-            self.model = LSTMSurgicalPredictor(
-                feature_dim=self.config['feature_dim'],
-                hidden_dim=self.config['hidden_dim'],
-                num_layers=2,
-                dropout=self.config['dropout'],
-                num_phases=self.config['num_phases']
-            )
-        elif model_type == 'transformer':
-            from model.model import TransformerSurgicalPredictor
-            self.model = TransformerSurgicalPredictor(
-                feature_dim=self.config['feature_dim'],
-                hidden_dim=self.config['hidden_dim'],
-                dropout=self.config['dropout'],
-                num_phases=self.config['num_phases']
-            )
-        else:
-            raise ValueError(f"Unknown model type: {model_type}")
+        if model_type != 'mstcn':
+            raise ValueError(f"Unknown model type: {model_type}. Only 'mstcn' is supported now.")
+
+        self.model = MSTCNSurgicalPredictor(
+            feature_dim=self.config['feature_dim'],
+            hidden_dim=self.config.get('mstcn_channels', 64),
+            num_stages=self.config.get('mstcn_stages', 4),
+            num_layers=self.config.get('mstcn_layers', 10),
+            dropout=self.config['dropout'],
+            num_phases=self.config['num_phases']
+        )
             
         self.model = self.model.to(self.device)
     
@@ -96,7 +89,8 @@ class Trainer:
         """Build loss function"""
         self.criterion = MultiTaskLoss(
             alpha=self.config['loss_alpha'],
-            beta=self.config['loss_beta']
+            beta=self.config['loss_beta'],
+            use_mstcn=True
         )
     
     def _build_optimizer(self):
@@ -439,64 +433,73 @@ def main():
     parser = argparse.ArgumentParser(description='Train surgical phase prediction model')
     
     # Data
-    parser.add_argument('--data_dir', type=str, default='data/processed',
+    parser.add_argument('--data_dir', type=str, default='data/labels/aligned_labels',
                         help='Path to processed data directory')
-    parser.add_argument('--save_dir', type=str, default='results/models/exp001',
+    parser.add_argument('--save_dir', type=str, default='results/models/mstcn_exp',
                         help='Directory to save checkpoints')
     
-    # Model
-    parser.add_argument('--model_type', type=str, default='lstm', choices=['lstm', 'transformer'],
-                        help='Model architecture type (sequence only)')
-    parser.add_argument('--feature_dim', type=int, default=768,
-                        help='Input feature dimension')
-    parser.add_argument('--hidden_dim', type=int, default=256,
-                        help='Hidden layer dimension')
-    parser.add_argument('--dropout', type=float, default=0.3,
-                        help='Dropout rate')
-    parser.add_argument('--num_phases', type=int, default=7,
-                        help='Number of surgical phases')
+    # Model (simplified)
+    parser.add_argument('--channels', type=int, default=64,
+                        help='MS-TCN feature channels')
+    parser.add_argument('--stages', type=int, default=4,
+                        help='Number of refinement stages')
+    parser.add_argument('--layers', type=int, default=10,
+                        help='Dilated conv layers per stage')
     
-    # Loss
-    parser.add_argument('--loss_alpha', type=float, default=1.0,
-                        help='Weight for classification loss')
-    parser.add_argument('--loss_beta', type=float, default=1.0,
-                        help='Weight for regression loss')
-    
-    # Training
-    parser.add_argument('--num_epochs', type=int, default=50,
+    # Training (simplified)
+    parser.add_argument('--epochs', type=int, default=50,
                         help='Number of training epochs')
-    parser.add_argument('--batch_size', type=int, default=1,
-                        help='Batch size (fixed to 1 for sequence training)')
-    parser.add_argument('--learning_rate', type=float, default=1e-4,
+    parser.add_argument('--lr', type=float, default=5e-4,
                         help='Learning rate')
-    parser.add_argument('--weight_decay', type=float, default=1e-5,
-                        help='Weight decay')
-    parser.add_argument('--grad_clip', type=float, default=5.0,
-                        help='Gradient clipping (0 to disable)')
-    parser.add_argument('--lr_patience', type=int, default=5,
-                        help='Patience for learning rate scheduler')
+    parser.add_argument('--batch_size', type=int, default=4,
+                        help='Batch size')
     
-    # Data loading
-    parser.add_argument('--num_workers', type=int, default=4,
-                        help='Number of data loading workers')
-    parser.add_argument('--normalize_features', action='store_true',
-                        help='Normalize input features')
-    parser.add_argument('--no_normalize_schedule', action='store_false', dest='normalize_schedule',
-                        help='Disable future_schedule normalization by video length')
-    parser.set_defaults(normalize_schedule=True)
+    # Optional
     parser.add_argument('--seed', type=int, default=42,
-                        help='Random seed for reproducibility')
-    
-    # Logging
-    parser.add_argument('--print_freq', type=int, default=100,
-                        help='Print frequency (batches)')
-    parser.add_argument('--save_vis_freq', type=int, default=5,
-                        help='Save visualization data frequency (epochs)')
+                        help='Random seed')
+    parser.add_argument('--workers', type=int, default=0,
+                        help='Number of data loading workers')
     
     args = parser.parse_args()
     
-    # Convert to config dict
-    config = vars(args)
+    # Convert to full config dict with defaults
+    config = {
+        # Data
+        'data_dir': args.data_dir,
+        'save_dir': args.save_dir,
+        
+        # Model
+        'model_type': 'mstcn',
+        'feature_dim': 768,
+        'mstcn_channels': args.channels,
+        'mstcn_stages': args.stages,
+        'mstcn_layers': args.layers,
+        'dropout': 0.3,
+        'num_phases': 7,
+        
+        # Loss
+        'loss_alpha': 1.0,
+        'loss_beta': 0.5,
+        'loss_gamma': 0.15,
+        
+        # Training
+        'num_epochs': args.epochs,
+        'batch_size': args.batch_size,
+        'learning_rate': args.lr,
+        'weight_decay': 1e-5,
+        'grad_clip': 5.0,
+        'lr_patience': 5,
+        
+        # Data loading
+        'num_workers': args.workers,
+        'normalize_features': True,
+        'normalize_schedule': True,
+        'seed': args.seed,
+        
+        # Logging
+        'print_freq': 100,
+        'save_vis_freq': 5
+    }
     
     # Print configuration
     print("\n" + "="*70)
