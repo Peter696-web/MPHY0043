@@ -191,10 +191,11 @@ class MSTCNSurgicalPredictor(nn.Module):
             dropout=dropout
         )
         
-        # 回归分支：从 MS-TCN Stage 1 的特征预测 future_schedule
-        # 使用独立的卷积分支
+        # 回归分支：从视觉特征 + 阶段概率 + 时间特征预测 future_schedule
+        # 方案C+ (阶段感知 + 时间特征) - 恢复此版本，效果更好
+        # 输入维度：feature_dim + num_phases + 1 (视觉特征 + 阶段概率 + 全局时间)
         self.regression_branch = nn.Sequential(
-            nn.Conv1d(feature_dim, hidden_dim, 1),
+            nn.Conv1d(feature_dim + num_phases + 1, hidden_dim, 1),  # 768 + 7 + 1 = 776
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Conv1d(hidden_dim, hidden_dim, 3, padding=1),
@@ -205,7 +206,9 @@ class MSTCNSurgicalPredictor(nn.Module):
         
     def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
         """
-        前向传播
+        前向传播（方案C+：阶段感知 + 时间特征）
+        
+        核心：回归分支使用阶段概率，帮助理解手术流程和阶段顺序
         
         Args:
             x: (B, T, feature_dim) 输入特征序列
@@ -221,17 +224,29 @@ class MSTCNSurgicalPredictor(nn.Module):
         # MS-TCN 分类（多阶段输出）
         stage_outputs = self.mstcn(x)  # list of (B, T, num_phases)
         
-        # 回归分支（从原始特征预测）
-        x_1d = x.permute(0, 2, 1)  # (B, C, T)
-        schedule_flat = self.regression_branch(x_1d)  # (B, num_phases*2, T)
+        # 获取最终阶段的分类概率
+        phase_logits = stage_outputs[-1]  # (B, T, num_phases)
+        phase_probs = F.softmax(phase_logits, dim=-1)  # (B, T, num_phases)
+        
+        # 方案C+核心：添加时间特征
+        # 1. 全局时间位置: t/T (归一化的时间戳)
+        time_pos = torch.arange(T, device=x.device, dtype=torch.float32).unsqueeze(0).unsqueeze(-1) / T  # (1, T, 1)
+        time_pos = time_pos.expand(B, -1, -1)  # (B, T, 1)
+        
+        # 合并: 视觉特征 + 阶段概率 + 时间位置
+        combined_features = torch.cat([x, phase_probs, time_pos], dim=-1)  # (B, T, 768+7+1=776)
+        
+        # 回归分支（从合并特征预测）
+        combined_1d = combined_features.permute(0, 2, 1)  # (B, 776, T)
+        schedule_flat = self.regression_branch(combined_1d)  # (B, num_phases*2, T)
         schedule_flat = schedule_flat.permute(0, 2, 1)  # (B, T, num_phases*2)
         future_schedule = schedule_flat.reshape(B, T, self.num_phases, 2)
         future_schedule = torch.relu(future_schedule) + 1e-6
         
         return {
-            'phase_logits': stage_outputs[-1],      # 最后阶段的预测
+            'phase_logits': phase_logits,           # 最后阶段的预测
             'future_schedule': future_schedule,
-            'stage_outputs': stage_outputs          # 所有阶段的预测（用于计算损失）
+            'stage_outputs': stage_outputs          # 用于计算多阶段损失
         }
 
 
