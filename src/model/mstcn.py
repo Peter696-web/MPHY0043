@@ -191,11 +191,10 @@ class MSTCNSurgicalPredictor(nn.Module):
             dropout=dropout
         )
         
-        # Regression branch: Predict future_schedule from visual features + phase probs + time features
-        # Solution C+ (phase-aware + time features) - restored this version, works better
-        # Input dimension: feature_dim + num_phases + 1 (visual features + phase probs + global time)
+        # Regression branch: Predict future_schedule from phase probs + time features (Simplified)
+        # Input dimension: num_phases + 1 (phase probs + global time)
         self.regression_branch = nn.Sequential(
-            nn.Conv1d(feature_dim + num_phases + 1, hidden_dim, 1),  # 768 + 7 + 1 = 776
+            nn.Conv1d(num_phases + 1, hidden_dim, 1),  # 7 + 1 = 8
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Conv1d(hidden_dim, hidden_dim, 3, padding=1),
@@ -233,11 +232,12 @@ class MSTCNSurgicalPredictor(nn.Module):
         time_pos = torch.arange(T, device=x.device, dtype=torch.float32).unsqueeze(0).unsqueeze(-1) / T  # (1, T, 1)
         time_pos = time_pos.expand(B, -1, -1)  # (B, T, 1)
         
-        # Combine: visual features + phase probabilities + time position
-        combined_features = torch.cat([x, phase_probs, time_pos], dim=-1)  # (B, T, 768+7+1=776)
+        # Combine: phase probabilities + time position
+        # We removed visual features 'x' to reduce parameters and force dependency on phase recognition
+        combined_features = torch.cat([phase_probs, time_pos], dim=-1)  # (B, T, 7+1=8)
         
         # Regression branch (predict from combined features)
-        combined_1d = combined_features.permute(0, 2, 1)  # (B, 776, T)
+        combined_1d = combined_features.permute(0, 2, 1)  # (B, 8, T)
         schedule_flat = self.regression_branch(combined_1d)  # (B, num_phases*2, T)
         schedule_flat = schedule_flat.permute(0, 2, 1)  # (B, T, num_phases*2)
         future_schedule = schedule_flat.reshape(B, T, self.num_phases, 2)
