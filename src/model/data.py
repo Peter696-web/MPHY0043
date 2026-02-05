@@ -281,7 +281,7 @@ def create_dataloaders(data_dir: str,
     val_loader = DataLoader(
         val_dataset,
         batch_size=batch_size,
-        shuffle=False,  # Validation set not shuffled
+        shuffle=False,  
         num_workers=num_workers,
         pin_memory=pin_memory,
         drop_last=False,
@@ -291,7 +291,7 @@ def create_dataloaders(data_dir: str,
     test_loader = DataLoader(
         test_dataset,
         batch_size=batch_size,
-        shuffle=False,  # Test set not shuffled
+        shuffle=False, 
         num_workers=num_workers,
         pin_memory=pin_memory,
         drop_last=False,

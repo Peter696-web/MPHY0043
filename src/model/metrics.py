@@ -41,8 +41,16 @@ class MetricsCalculator:
         self.schedule_targets.append(true_sched.reshape(-1, true_sched.shape[-2], true_sched.shape[-1]))
     
     def compute(self):
-        """Compute essential metrics only: Accuracy, F1, MSE"""
+        """Compute essential metrics only: Accuracy, F1, MAE"""
         metrics = {}
+        
+        # Check if we have any data
+        if not self.phase_preds:
+            return {
+                'accuracy': 0.0,
+                'f1': 0.0,
+                'mae': float('inf')  # Return inf MAE for empty data
+            }
         
         # Classification metrics
         phase_pred = np.array(self.phase_preds)
@@ -51,18 +59,21 @@ class MetricsCalculator:
         metrics['accuracy'] = float(accuracy_score(phase_true, phase_pred))
         metrics['f1'] = float(f1_score(phase_true, phase_pred, average='macro', zero_division=0))
         
-        # Regression metrics - MSE only
-        pred_sched = np.concatenate(self.schedule_preds, axis=0)  # (N, 7, 2)
-        true_sched = np.concatenate(self.schedule_targets, axis=0)
-        
-        # Valid mask
-        valid_mask = (true_sched >= 0)
+        # Regression metric - MAE only
+        if not self.schedule_preds:
+             metrics['mae'] = float('inf')
+        else:
+            pred_sched = np.concatenate(self.schedule_preds, axis=0)  # (N, 7, 2)
+            true_sched = np.concatenate(self.schedule_targets, axis=0)
+            
+            # Valid mask
+            valid_mask = (true_sched >= 0)
         
         if valid_mask.sum() > 0:
-            mse = np.mean((pred_sched[valid_mask] - true_sched[valid_mask]) ** 2)
+            mae = np.mean(np.abs(pred_sched[valid_mask] - true_sched[valid_mask]))
         else:
-            mse = 0.0
+            mae = 0.0
         
-        metrics['mse'] = float(mse)
+        metrics['mae'] = float(mae)
         
         return metrics

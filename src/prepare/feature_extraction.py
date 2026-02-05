@@ -89,7 +89,6 @@ def main():
         for name in manifest.get('test', []):
             vid_split[name] = 'test'
 
-    # Cholec80 only
     root = args.data_root
     frames_dir = os.path.join(root, "frames")
 
@@ -115,7 +114,6 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
 
     id_map = {
-        # "small": "facebook/dinov2-small",
         "base":  "facebook/dinov2-base",
         "large": "facebook/dinov2-large",
         "giant": "facebook/dinov2-giant",
@@ -178,7 +176,7 @@ def main():
                 'tokens': token_tensor,
                 'frame_ids': frame_ids
             }
-            tag = id_map[m].split("/")[-1] + '-cls'              # dinov2-small, dinov2-base ...
+            tag = id_map[m].split("/")[-1] + '-cls'             
             split_subdir = vid_split.get(vid_name, None)
             save_path = out_dir / tag
             if split_subdir:

@@ -20,32 +20,61 @@ import torch.nn.functional as F
 from typing import Dict, List
 
 
+class FocalLoss(nn.Module):
+    """
+    Focal Loss for Multi-class Classification
+    FL(p_t) = -alpha * (1 - p_t)^gamma * log(p_t)
+    """
+    def __init__(self, alpha=0.25, gamma=2.0, reduction='mean'):
+        super().__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.reduction = reduction
+
+    def forward(self, inputs, targets):
+        ce_loss = F.cross_entropy(inputs, targets, reduction='none')
+        pt = torch.exp(-ce_loss)
+        focal_loss = self.alpha * (1 - pt) ** self.gamma * ce_loss
+
+        if self.reduction == 'mean':
+            return focal_loss.mean()
+        elif self.reduction == 'sum':
+            return focal_loss.sum()
+        else:
+            return focal_loss
+
+
 class MultiTaskLoss(nn.Module):
     """
     Multi-task loss function with temporal smoothing
     
-    Loss = alpha * CrossEntropy(phase) + beta * MSE(future_schedule) + gamma * TMSE(phase)
+    Loss = alpha * FocalLoss(phase) + beta * Huber(future_schedule) + gamma * TMSE(phase)
     
-    Task 1: Current phase classification
-    Task 2: Future phase schedule prediction (start_offset, duration)
+    Task 1: Current phase classification - Uses Focal Loss
+    Task 2: Future phase schedule prediction (start_offset, duration) - Uses Huber Loss
     Task 3: Temporal smoothing (MS-TCN standard)
     """
     
-    def __init__(self, alpha=1.0, beta=1.0, gamma=0.15, use_mstcn=False):
+    def __init__(self, alpha=1.0, beta=1.0, gamma=0.15, use_mstcn=False, delta=1.0):
         """
         Args:
             alpha: Weight for classification task
             beta: Weight for regression task
             gamma: Weight for temporal smoothing loss (MS-TCN only)
             use_mstcn: Whether using MS-TCN (enables multi-stage loss)
+            delta: Threshold for Huber Loss
         """
         super().__init__()
         self.alpha = alpha
         self.beta = beta
         self.gamma = gamma
         self.use_mstcn = use_mstcn
-        self.ce_loss = nn.CrossEntropyLoss()
-        self.mse_loss = nn.MSELoss()
+        self.delta = delta
+        
+        # Switched to Focal Loss for classification
+        self.ce_loss = FocalLoss(gamma=2.0)
+        
+        # Huber Loss (functional) will be used in forward
     
     def temporal_smoothing_loss(self, logits):
         """
@@ -95,8 +124,10 @@ class MultiTaskLoss(nn.Module):
         true_sched = targets['future_schedule']               # (B, T, num_phases, 2)
         valid_mask = (true_sched >= 0).float()
         
-        mse = ((pred_sched - true_sched.clamp(min=0)) ** 2) * valid_mask
-        loss_reg = mse.sum() / (valid_mask.sum() + 1e-8)
+        # Use Huber Loss (Smooth L1) for regression
+        # Combine Focal Loss (Classification) + Huber (Regression)
+        loss_huber = F.huber_loss(pred_sched, true_sched.clamp(min=0), reduction='none', delta=self.delta)
+        loss_reg = (loss_huber * valid_mask).sum() / (valid_mask.sum() + 1e-8)
         
         # 3. Temporal smoothing loss (MS-TCN)
         loss_smooth = 0.0

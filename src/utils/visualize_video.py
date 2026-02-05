@@ -103,7 +103,8 @@ def plot_triangle_visualization(video_data, video_len, label_data, save_path, sh
     
     for t in range(len(frame_ids)):
         current_phase = true_phases[t]
-        pred_remaining.append(pred_schedule_denorm[t, current_phase, 1])
+        current_pred_phases = pred_phases[t]  
+        pred_remaining.append(pred_schedule_denorm[t, current_pred_phases, 1])
         true_remaining.append(max(0, true_schedule_denorm[t, current_phase, 1]))
     
     pred_remaining = np.array(pred_remaining)

@@ -59,9 +59,12 @@ class Trainer:
         
         # Training state
         self.start_epoch = 0
-        self.best_score = -float('inf')
+        self.best_score = float('-inf')  # Track best composite score (higher is better)
+        self.best_f1 = 0.0  # Track for logging
+        self.best_mae = float('inf')  # Track for logging
         self.train_history = []
         self.val_history = []
+        self.best_checkpoint_path = None  # Track the path of the current best checkpoint
         
         print(f"Device: {self.device}")
         print(f"Model parameters: {sum(p.numel() for p in self.model.parameters()):,}")
@@ -104,7 +107,7 @@ class Trainer:
         # Learning rate scheduler
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
             self.optimizer,
-            mode='max',  # Maximize validation score
+            mode='min',  # Minimize MAE
             factor=0.5,
             patience=self.config['lr_patience'],
             verbose=True
@@ -267,26 +270,31 @@ class Trainer:
         """
         Compute validation score for model selection
         
-        Balanced combination of classification and regression:
-        - F1 score (classification performance): range [0, 1]
-        - RMSE score (regression performance): range [0, 1], lower RMSE is better
+        Combine F1 and MAE into a composite score:
+        - F1: higher is better (range 0-1)
+        - MAE: lower is better (convert to range 0-1 by normalization)
         
-        Formula: val_score = 0.5 * F1 + 0.5 * (100 / (100 + RMSE))
+        Composite Score = w1 * F1 + w2 * (1 - normalized_MAE)
+        where normalized_MAE = MAE / 100 (assuming MAE typically < 100)
         
-        This ensures both tasks contribute equally to the final score.
+        Returns:
+            float: Composite score (higher is better)
         """
-        # Convert RMSE to a score in [0, 1] range
-        # When RMSE=0:   score=1.0
-        # When RMSE=100: score=0.5
-        # When RMSE=300: score=0.25
-        rmse_score = 100.0 / (100.0 + metrics['rmse'])
+        # Weights for F1 and MAE (can be tuned)
+        w_f1 = 0.5
+        w_mae = 0.5
         
-        # Weighted combination (50% classification, 50% regression)
-        score = 0.5 * metrics['f1'] + 0.5 * rmse_score
+        # Normalize MAE to 0-1 range (inverse: lower MAE = higher score)
+        # Assume typical MAE is in range [0, 100]
+        mae_normalized = min(metrics['mae'] / 100.0, 1.0)
+        mae_score = 1.0 - mae_normalized  # Convert to "higher is better"
+        
+        # Composite score
+        score = w_f1 * metrics['f1'] + w_mae * mae_score
         
         return score
     
-    def save_checkpoint(self, epoch, is_best=False):
+    def save_checkpoint(self, epoch, is_best=False, composite_score=None):
         """Save model checkpoint"""
         checkpoint = {
             'epoch': epoch,
@@ -294,23 +302,43 @@ class Trainer:
             'optimizer_state_dict': self.optimizer.state_dict(),
             'scheduler_state_dict': self.scheduler.state_dict(),
             'best_score': self.best_score,
+            'best_f1': self.best_f1,
+            'best_mae': self.best_mae,
             'config': self.config
         }
         
-        # Save latest checkpoint
-        torch.save(checkpoint, self.save_dir / 'checkpoint_latest.pth')
-        
-        # Save best checkpoint
+        # Save best checkpoint (overwrites previous best)
         if is_best:
-            torch.save(checkpoint, self.save_dir / 'checkpoint_best.pth')
-            print(f"  → Best model saved (score: {self.best_score:.4f})")
+            try:
+                # Remove previous best checkpoint if it exists
+                if self.best_checkpoint_path and self.best_checkpoint_path.exists():
+                    self.best_checkpoint_path.unlink()
+                
+                # Cleanup pattern match just in case
+                for f in self.save_dir.glob('checkpoint_best_epoch*.pth'):
+                     try:
+                         if self.best_checkpoint_path and f != self.best_checkpoint_path:
+                             f.unlink()
+                     except: pass
+                
+                # Remove previous visualisations
+                for f in self.save_dir.glob('val_predictions_*.pt'):
+                    f.unlink()
+
+            except Exception as e:
+                print(f"Warning: could not delete old files: {e}")
+
+            # New filename with epoch
+            best_name = f'checkpoint_best_epoch{epoch}.pth'
+            self.best_checkpoint_path = self.save_dir / best_name
+            
+            torch.save(checkpoint, self.best_checkpoint_path)
+            print(f"  → Best model saved to {best_name} (MAE: {self.best_mae:.4f}, F1: {self.best_f1:.4f})")
     
     def save_visualization_data(self, vis_data, epoch):
         """Save data for visualization"""
-        if isinstance(epoch, int):
-            save_path = self.save_dir / f'val_predictions_epoch{epoch:03d}.pt'
-        else:
-            save_path = self.save_dir / f'val_predictions_{epoch}.pt'
+        # Save correspond to the best epoch
+        save_path = self.save_dir / f'val_predictions_best_epoch{epoch}.pt'
         torch.save(vis_data, save_path)
     
     def train(self):
@@ -329,11 +357,11 @@ class Trainer:
             # Validate
             val_losses, val_metrics, vis_data = self.validate()
             
-            # Compute validation score
-            val_score = self.compute_validation_score(val_metrics)
+            # Compute validation score - Now only MAE
+            # val_score = self.compute_validation_score(val_metrics)
             
-            # Update learning rate
-            self.scheduler.step(val_score)
+            # Update learning rate (still use MAE for scheduler)
+            self.scheduler.step(val_metrics['mae'])
             
             # Print epoch summary
             print(f"\nEpoch {epoch+1} Summary (time: {train_time:.1f}s):")
@@ -349,7 +377,7 @@ class Trainer:
             print(f"  Val   Acc: {val_metrics['accuracy']:.4f}, "
                   f"F1: {val_metrics['f1']:.4f}, "
                   f"MAE: {val_metrics['mae']:.4f}")
-            print(f"  Val Score: {val_score:.4f}")
+            print(f"  Current Best MAE: {self.best_mae:.4f}")
             
             # Save history
             self.train_history.append({
@@ -361,44 +389,31 @@ class Trainer:
                 'epoch': epoch + 1,
                 'losses': val_losses,
                 'metrics': val_metrics,
-                'score': val_score
+                # 'composite_score': val_score
             })
             
-            # Save checkpoint and visualization data
-            is_best_score = val_score > self.best_score
-            is_best_f1 = val_metrics['f1'] > getattr(self, 'best_f1', -float('inf'))
-            is_best_rmse = val_metrics['rmse'] < getattr(self, 'best_rmse', float('inf'))
+            # Check if this is the best model based on MAE (lower is better)
+            # If MAE is same (very rare for floats, but checking approx equal), compare F1
+            is_best = False
+            val_mae = val_metrics['mae']
+            val_f1 = val_metrics['f1']
             
-            if is_best_score:
-                self.best_score = val_score
-                self.save_checkpoint(epoch + 1, is_best=True)
+            if val_mae < self.best_mae:
+                is_best = True
+            elif abs(val_mae - self.best_mae) < 1e-6:
+                if val_f1 > self.best_f1:
+                    is_best = True
+                    print(f"  → Same MAE ({val_mae:.4f}), better F1: {val_f1:.4f} > {self.best_f1:.4f}")
+            
+            if is_best:
+                self.best_score = val_mae 
+                self.best_f1 = val_f1
+                self.best_mae = val_mae
+                self.save_checkpoint(epoch + 1, is_best=True, composite_score=val_mae)
                 self.save_visualization_data(vis_data, epoch + 1)
-                print(f"  → Best Score model saved: {self.best_score:.4f}")
             
-            if is_best_f1:
-                self.best_f1 = val_metrics['f1']
-                torch.save({
-                    'epoch': epoch + 1,
-                    'model_state_dict': self.model.state_dict(),
-                    'f1': self.best_f1,
-                    'config': self.config
-                }, self.save_dir / 'checkpoint_best_f1.pth')
-                self.save_visualization_data(vis_data, f"{epoch + 1}_f1")
-                print(f"  → Best F1 model saved: {self.best_f1:.4f}")
-            
-            if is_best_rmse:
-                self.best_rmse = val_metrics['rmse']
-                torch.save({
-                    'epoch': epoch + 1,
-                    'model_state_dict': self.model.state_dict(),
-                    'rmse': self.best_rmse,
-                    'config': self.config
-                }, self.save_dir / 'checkpoint_best_rmse.pth')
-                self.save_visualization_data(vis_data, f"{epoch + 1}_rmse")
-                print(f"  → Best RMSE model saved: {self.best_rmse:.4f}")
-            
-            # Save latest checkpoint
-            self.save_checkpoint(epoch + 1, is_best=False)
+            # We do NOT save the latest checkpoint every epoch to save space
+            # self.save_checkpoint(epoch + 1, is_best=False)
             
             # Save training history
             history = {
@@ -423,7 +438,9 @@ class Trainer:
         
         print("\n" + "="*70)
         print("Training completed!")
-        print(f"Best validation score: {self.best_score:.4f}")
+        print(f"Best validation composite score: {self.best_score:.4f}")
+        print(f"  → Best F1: {self.best_f1:.4f}")
+        print(f"  → Best MAE: {self.best_mae:.4f}")
         print(f"Model saved to: {self.save_dir}")
         print("="*70)
 
@@ -433,10 +450,12 @@ def main():
     parser = argparse.ArgumentParser(description='Train surgical phase prediction model')
     
     # Data
-    parser.add_argument('--data_dir', type=str, default='data/labels/aligned_labels',
+    parser.add_argument('--data_dir', type=str, default='data/processed',
                         help='Path to processed data directory')
-    parser.add_argument('--save_dir', type=str, default='results/models/mstcn_exp',
-                        help='Directory to save checkpoints')
+    parser.add_argument('--exp_name', type=str, default='mstcn_exp',
+                        help='Experiment name (auto creates save_dir)')
+    parser.add_argument('--save_dir', type=str, default=None,
+                        help='Directory to save checkpoints (overrides exp_name)')
     
     # Model (simplified)
     parser.add_argument('--channels', type=int, default=64,
@@ -461,6 +480,10 @@ def main():
                         help='Number of data loading workers')
     
     args = parser.parse_args()
+    
+    # Auto-generate save_dir from exp_name if not specified
+    if args.save_dir is None:
+        args.save_dir = f'results/models/{args.exp_name}'
     
     # Convert to full config dict with defaults
     config = {
