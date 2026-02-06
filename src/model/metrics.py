@@ -25,20 +25,22 @@ class MetricsCalculator:
     def update(self, predictions, targets):
         """Update metrics (accumulate one batch)"""
         # Classification (frame-level)
-        phase_logits = predictions['phase_logits'].detach().cpu()   # (B, T, num_phases)
-        B, T, _ = phase_logits.shape
-        phase_pred = torch.argmax(phase_logits, dim=2).reshape(-1).numpy()
-        phase_true = targets['phase_id'].detach().cpu().reshape(-1).numpy()
+        if 'phase_logits' in predictions:
+            phase_logits = predictions['phase_logits'].detach().cpu()   # (B, T, num_phases)
+            B, T, _ = phase_logits.shape
+            phase_pred = torch.argmax(phase_logits, dim=2).reshape(-1).numpy()
+            phase_true = targets['phase_id'].detach().cpu().reshape(-1).numpy()
+            
+            self.phase_preds.extend(phase_pred.tolist())
+            self.phase_targets.extend(phase_true.tolist())
         
-        self.phase_preds.extend(phase_pred.tolist())
-        self.phase_targets.extend(phase_true.tolist())
-        
-        # Regression (frame-level)
-        pred_sched = predictions['future_schedule'].detach().cpu().numpy()   # (B, T, 7, 2)
-        true_sched = targets['future_schedule'].detach().cpu().numpy()
+        # Regression (frame-level) - ONLY if present in predictions
+        if 'future_schedule' in predictions:
+            pred_sched = predictions['future_schedule'].detach().cpu().numpy()   # (B, T, 7, 2)
+            true_sched = targets['future_schedule'].detach().cpu().numpy()
 
-        self.schedule_preds.append(pred_sched.reshape(-1, pred_sched.shape[-2], pred_sched.shape[-1]))
-        self.schedule_targets.append(true_sched.reshape(-1, true_sched.shape[-2], true_sched.shape[-1]))
+            self.schedule_preds.append(pred_sched.reshape(-1, pred_sched.shape[-2], pred_sched.shape[-1]))
+            self.schedule_targets.append(true_sched.reshape(-1, true_sched.shape[-2], true_sched.shape[-1]))
     
     def compute(self):
         """Compute essential metrics only: Accuracy, F1, MAE"""
@@ -58,6 +60,26 @@ class MetricsCalculator:
         
         metrics['accuracy'] = float(accuracy_score(phase_true, phase_pred))
         metrics['f1'] = float(f1_score(phase_true, phase_pred, average='macro', zero_division=0))
+        
+        # Regression metrics (only if data exists)
+        if self.schedule_preds:
+            sched_pred = np.concatenate(self.schedule_preds, axis=0) # (Total_frames, 7, 2)
+            sched_true = np.concatenate(self.schedule_targets, axis=0)
+            
+            # Mask out invalid targets (-1)
+            valid_mask = sched_true >= 0
+            
+            if valid_mask.sum() > 0:
+                mae = np.mean(np.abs(sched_pred[valid_mask] - sched_true[valid_mask]))
+                metrics['mae'] = float(mae)
+            else:
+                 metrics['mae'] = float('inf')
+        else:
+            # If no regression predictions, we can either return inf or just not include it.
+            # Train files expect 'mae' key for scheduler, so 'inf' or 0 is safer.
+            metrics['mae'] = 0.0 # No regression task -> MAE is 0/irrelevant
+
+        return metrics
         
         # Regression metric - MAE only
         if not self.schedule_preds:

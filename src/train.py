@@ -64,7 +64,8 @@ class Trainer:
         self.best_mae = float('inf')  # Track for logging
         self.train_history = []
         self.val_history = []
-        self.best_checkpoint_path = None  # Track the path of the current best checkpoint
+        self.best_checkpoint_path_f1 = None
+        self.best_checkpoint_path_mae = None
         
         print(f"Device: {self.device}")
         print(f"Model parameters: {sum(p.numel() for p in self.model.parameters()):,}")
@@ -83,7 +84,8 @@ class Trainer:
             num_stages=self.config.get('mstcn_stages', 4),
             num_layers=self.config.get('mstcn_layers', 10),
             dropout=self.config['dropout'],
-            num_phases=self.config['num_phases']
+            num_phases=self.config['num_phases'],
+            use_external_time_input=self.config.get('use_external_time_input', False)
         )
             
         self.model = self.model.to(self.device)
@@ -122,6 +124,7 @@ class Trainer:
             num_workers=self.config['num_workers'],
             normalize_features=self.config['normalize_features'],
             normalize_schedule=self.config['normalize_schedule'],
+            use_external_time=self.config.get('use_external_time_input', False), # Pass config (Task B)
             seed=self.config.get('seed', 42)
         )
         
@@ -294,8 +297,13 @@ class Trainer:
         
         return score
     
-    def save_checkpoint(self, epoch, is_best=False, composite_score=None):
-        """Save model checkpoint"""
+    def save_checkpoint(self, epoch, metric_type=None):
+        """
+        Save model checkpoint for specific metric best
+        Args:
+            epoch: Current epoch
+            metric_type: 'f1' or 'mae'
+        """
         checkpoint = {
             'epoch': epoch,
             'model_state_dict': self.model.state_dict(),
@@ -307,38 +315,26 @@ class Trainer:
             'config': self.config
         }
         
-        # Save best checkpoint (overwrites previous best)
-        if is_best:
-            try:
-                # Remove previous best checkpoint if it exists
-                if self.best_checkpoint_path and self.best_checkpoint_path.exists():
-                    self.best_checkpoint_path.unlink()
-                
-                # Cleanup pattern match just in case
-                for f in self.save_dir.glob('checkpoint_best_epoch*.pth'):
-                     try:
-                         if self.best_checkpoint_path and f != self.best_checkpoint_path:
-                             f.unlink()
-                     except: pass
-                
-                # Remove previous visualisations
-                for f in self.save_dir.glob('val_predictions_*.pt'):
-                    f.unlink()
-
-            except Exception as e:
-                print(f"Warning: could not delete old files: {e}")
-
-            # New filename with epoch
-            best_name = f'checkpoint_best_epoch{epoch}.pth'
-            self.best_checkpoint_path = self.save_dir / best_name
+        if metric_type == 'f1':
+            filename = 'checkpoint_best_f1.pth'
+            save_path = self.save_dir / filename
+            torch.save(checkpoint, save_path)
+            self.best_checkpoint_path_f1 = save_path
+            print(f"  ★ New Best F1 Model saved to {filename} (F1: {self.best_f1:.4f})")
             
-            torch.save(checkpoint, self.best_checkpoint_path)
-            print(f"  → Best model saved to {best_name} (MAE: {self.best_mae:.4f}, F1: {self.best_f1:.4f})")
+        elif metric_type == 'mae':
+            filename = 'checkpoint_best_mae.pth'
+            save_path = self.save_dir / filename
+            torch.save(checkpoint, save_path)
+            self.best_checkpoint_path_mae = save_path
+            print(f"  ★ New Best MAE Model saved to {filename} (MAE: {self.best_mae:.4f})")
+
     
-    def save_visualization_data(self, vis_data, epoch):
+    def save_visualization_data(self, vis_data, metric_type):
         """Save data for visualization"""
-        # Save correspond to the best epoch
-        save_path = self.save_dir / f'val_predictions_best_epoch{epoch}.pt'
+        # Save prediction data for the best epoch (overwrites previous best)
+        filename = f'val_predictions_best_{metric_type}.pt'
+        save_path = self.save_dir / filename
         torch.save(vis_data, save_path)
     
     def train(self):
@@ -392,25 +388,26 @@ class Trainer:
                 # 'composite_score': val_score
             })
             
-            # Check if this is the best model based on MAE (lower is better)
-            # If MAE is same (very rare for floats, but checking approx equal), compare F1
-            is_best = False
+            # Check independent best scores
             val_mae = val_metrics['mae']
             val_f1 = val_metrics['f1']
             
+            # 1. Update Best MAE (Lower is better)
             if val_mae < self.best_mae:
-                is_best = True
-            elif abs(val_mae - self.best_mae) < 1e-6:
-                if val_f1 > self.best_f1:
-                    is_best = True
-                    print(f"  → Same MAE ({val_mae:.4f}), better F1: {val_f1:.4f} > {self.best_f1:.4f}")
-            
-            if is_best:
-                self.best_score = val_mae 
-                self.best_f1 = val_f1
+                print(f"  ↗ Improved MAE: {val_mae:.4f} < {self.best_mae:.4f}")
                 self.best_mae = val_mae
-                self.save_checkpoint(epoch + 1, is_best=True, composite_score=val_mae)
-                self.save_visualization_data(vis_data, epoch + 1)
+                self.save_checkpoint(epoch + 1, metric_type='mae')
+                # Save predictions for visualization (for best MAE model)
+                self.save_visualization_data(vis_data, metric_type='mae')
+
+            # 2. Update Best F1 (Higher is better)
+            if val_f1 > self.best_f1:
+                print(f"  ↗ Improved F1: {val_f1:.4f} > {self.best_f1:.4f}")
+                self.best_f1 = val_f1
+                self.save_checkpoint(epoch + 1, metric_type='f1')
+                # Save predictions for visualization (for best F1 model)
+                self.save_visualization_data(vis_data, metric_type='f1')
+
             
             # We do NOT save the latest checkpoint every epoch to save space
             # self.save_checkpoint(epoch + 1, is_best=False)
@@ -464,13 +461,15 @@ def main():
                         help='Number of refinement stages')
     parser.add_argument('--layers', type=int, default=10,
                         help='Dilated conv layers per stage')
+    parser.add_argument('--use_external_time_input', type=int, default=0,
+                        help='Use external time input for Task B (0: False, 1: True)')
     
     # Training (simplified)
     parser.add_argument('--epochs', type=int, default=50,
                         help='Number of training epochs')
     parser.add_argument('--lr', type=float, default=5e-4,
                         help='Learning rate')
-    parser.add_argument('--batch_size', type=int, default=4,
+    parser.add_argument('--batch_size', type=int, default=1,
                         help='Batch size')
     
     # Optional
@@ -499,6 +498,7 @@ def main():
         'mstcn_layers': args.layers,
         'dropout': 0.3,
         'num_phases': 7,
+        'use_external_time_input': bool(args.use_external_time_input),
         
         # Loss
         'loss_alpha': 1.0,

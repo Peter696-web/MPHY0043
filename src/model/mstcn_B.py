@@ -197,61 +197,33 @@ class MSTCNSurgicalPredictor(nn.Module):
             dropout=dropout
         )
         
-        # Regression branch: Predict future_schedule from phase probs + time features (Simplified)
-        # Input dimension: num_phases + 1 (phase probs + global time)
-        self.regression_branch = nn.Sequential(
-            nn.Conv1d(num_phases + 1, hidden_dim, 1),  # 7 + 1 = 8
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Conv1d(hidden_dim, hidden_dim, 3, padding=1),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Conv1d(hidden_dim, num_phases * 2, 1)  # 7 phases × 2 values
-        )
+        # Classification-only Task B:
+        # We removed the Regression branch entirely.
+        # The external time input (if enabled) is handled via stage1_input_dim above.
         
     def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
         """
-        Forward pass (Solution C+: phase-aware + time features)
-        
-        Core: Regression branch uses phase probabilities to help understand surgical flow and phase ordering
+        Forward pass (Task B: Classification only)
         
         Args:
             x: (B, T, feature_dim) Input feature sequence
+               If use_external_time_input=True, feature_dim includes the time features.
             
         Returns:
             dict with keys:
                 - phase_logits: (B, T, num_phases) Final stage phase classification logits
-                - future_schedule: (B, T, num_phases, 2) Future schedule prediction
-                - stage_outputs: list of (B, T, num_phases) Predictions from each stage (for multi-stage supervision)
+                - stage_outputs: list of (B, T, num_phases) Predictions from each stage
         """
-        B, T, C = x.shape
-        
         # MS-TCN classification (multi-stage outputs)
         stage_outputs = self.mstcn(x)  # list of (B, T, num_phases)
         
         # Get final stage classification probabilities
         phase_logits = stage_outputs[-1]  # (B, T, num_phases)
-        phase_probs = F.softmax(phase_logits, dim=-1)  # (B, T, num_phases)
         
-        # Solution C+ core: Add time features
-        # 1. Global time position: t/T (normalized timestamp)
-        time_pos = torch.arange(T, device=x.device, dtype=torch.float32).unsqueeze(0).unsqueeze(-1) / T  # (1, T, 1)
-        time_pos = time_pos.expand(B, -1, -1)  # (B, T, 1)
-        
-        # Combine: phase probabilities + time position
-        # We removed visual features 'x' to reduce parameters and force dependency on phase recognition
-        combined_features = torch.cat([phase_probs, time_pos], dim=-1)  # (B, T, 7+1=8)
-        
-        # Regression branch (predict from combined features)
-        combined_1d = combined_features.permute(0, 2, 1)  # (B, 8, T)
-        schedule_flat = self.regression_branch(combined_1d)  # (B, num_phases*2, T)
-        schedule_flat = schedule_flat.permute(0, 2, 1)  # (B, T, num_phases*2)
-        future_schedule = schedule_flat.reshape(B, T, self.num_phases, 2)
-        future_schedule = torch.relu(future_schedule) + 1e-6
+        # No regression branch
         
         return {
             'phase_logits': phase_logits,           # Final stage predictions
-            'future_schedule': future_schedule,
             'stage_outputs': stage_outputs          # For multi-stage loss computation
         }
 

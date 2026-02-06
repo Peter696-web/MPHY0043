@@ -30,16 +30,21 @@ class SurgicalPhaseDataset(Dataset):
                  transform=None,
                  normalize_features: bool = False,
                  normalize_schedule: bool = True,
-                 cache_data: bool = False):
+                 cache_data: bool = False,
+                 use_external_time: bool = False,
+                 external_time_dir: str = 'data/estimated_times'):
         """
         Initialize dataset
 
         Args:
-            data_dir: Data root directory (containing train/val/test subdirectories)
-            split: Dataset split ('train', 'val', 'test')
-            transform: Optional data augmentation
-            normalize_schedule: Whether to normalize future schedule by video length
-            cache_data: Whether to cache all data to memory
+            data_dir: Data root directory
+            split: Dataset split
+            transform: Data augmentation
+            normalize_features: Normalize DINOv2 features
+            normalize_schedule: Normalize target schedule
+            cache_data: Cache data to memory
+            use_external_time: Whether to load and concat external time predictions
+            external_time_dir: Directory containing the generated .npy files
         """
         super().__init__()
 
@@ -50,6 +55,14 @@ class SurgicalPhaseDataset(Dataset):
         self.normalize_features = normalize_features
         self.normalize_schedule = normalize_schedule
         self.cache_data = cache_data
+        
+        self.use_external_time = use_external_time
+        if use_external_time:
+            self.external_time_dir = Path(external_time_dir) / split
+            if not self.external_time_dir.exists():
+                print(f"Warning: External time dir {self.external_time_dir} does not exist!")
+            else:
+                print(f"Enabled external time input from {self.external_time_dir}")
 
         # Get all .npz files
         self.file_list = sorted(list(self.split_dir.glob('*.npz')))
@@ -149,6 +162,32 @@ class SurgicalPhaseDataset(Dataset):
         if self.normalize_schedule:
             future_schedule = future_schedule / float(video_len)
 
+        # External Time Input Injection (Task B)
+        if self.use_external_time:
+            # Load corresponding estimated schedule
+            time_file = self.external_time_dir / f"video{video_id:02d}_schedule.npy"
+            if time_file.exists():
+                # Shape: (T, 7, 2)
+                est_schedule = np.load(time_file).astype(np.float32)
+                
+                # Check length match (truncate or pad if needed, but should match exactly)
+                if est_schedule.shape[0] != features.shape[0]:
+                    # Basic safety check
+                    length = min(est_schedule.shape[0], features.shape[0])
+                    est_schedule = est_schedule[:length]
+                    # If features are longer, we might need logic, but assume aligned for now
+                
+                # Flatten: (T, 7, 2) -> (T, 14)
+                est_schedule_flat = est_schedule.reshape(est_schedule.shape[0], -1)
+                
+                # Concatenate: (T, 768) + (T, 14) -> (T, 782)
+                features = np.concatenate([features, est_schedule_flat], axis=1)
+            else:
+                # Fallback: Zero padding if file missing (should not happen if generated correctly)
+                zeros = np.zeros((features.shape[0], 14), dtype=np.float32)
+                features = np.concatenate([features, zeros], axis=1)
+                print(f"Warning: Missing time file {time_file}")
+
         if self.transform is not None:
             features = self.transform(features)
 
@@ -214,22 +253,21 @@ def create_dataloaders(data_dir: str,
                       normalize_features: bool = False,
                       normalize_schedule: bool = True,
                       cache_data: bool = False,
+                      use_external_time: bool = False,
                       seed: int = 42) -> Tuple[DataLoader, DataLoader, DataLoader]:
     """
     Create train, validation and test data loaders
 
     Args:
         data_dir: Data root directory
-        batch_size: Batch size (fixed to 1, one video per batch)
+        batch_size: Batch size (fixed to 1)
         num_workers: Data loading thread count
-        pin_memory: Whether to pin memory (recommended for GPU training)
+        pin_memory: Whether to pin memory
         normalize_features: Whether to normalize features
-        normalize_schedule: Whether to normalize future_schedule by video length
-        cache_data: Whether to cache data to memory
-        seed: Random seed for worker initialization
-
-    Returns:
-        (train_loader, val_loader, test_loader)
+        normalize_schedule: Whether to normalize future_schedule
+        cache_data: Whether to cache data
+        use_external_time: Whether to use external time input (Task B)
+        seed: Random seed
     """
     # Fixed batch_size=1: one video per batch
     if batch_size != 1:
@@ -242,7 +280,8 @@ def create_dataloaders(data_dir: str,
         split='train',
         normalize_features=normalize_features,
         normalize_schedule=normalize_schedule,
-        cache_data=cache_data
+        cache_data=cache_data,
+        use_external_time=use_external_time
     )
 
     val_dataset = SurgicalPhaseDataset(
@@ -250,7 +289,8 @@ def create_dataloaders(data_dir: str,
         split='val',
         normalize_features=normalize_features,
         normalize_schedule=normalize_schedule,
-        cache_data=cache_data
+        cache_data=cache_data,
+        use_external_time=use_external_time
     )
 
     test_dataset = SurgicalPhaseDataset(
@@ -258,7 +298,8 @@ def create_dataloaders(data_dir: str,
         split='test',
         normalize_features=normalize_features,
         normalize_schedule=normalize_schedule,
-        cache_data=cache_data
+        cache_data=cache_data,
+        use_external_time=use_external_time
     )
 
     # Worker random seed for reproducibility

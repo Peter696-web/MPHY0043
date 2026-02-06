@@ -136,6 +136,16 @@ class MultiTaskLoss(nn.Module):
             for stage_logits in predictions['stage_outputs']:
                 loss_smooth += self.temporal_smoothing_loss(stage_logits)
             loss_smooth /= len(predictions['stage_outputs'])
+            
+            # Deep Supervision for Classification
+            # Compute cross-entropy loss for every stage to improve gradient flow
+            loss_cls_all = 0.0
+            for stage_logits in predictions['stage_outputs']:
+                loss_cls_all += self.ce_loss(
+                    stage_logits.reshape(B * T, -1),
+                    phase_targets.reshape(B * T)
+                )
+            loss_cls = loss_cls_all / len(predictions['stage_outputs'])
         
         # Total loss with task weights
         total = self.alpha * loss_cls + self.beta * loss_reg
