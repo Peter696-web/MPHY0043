@@ -1,6 +1,6 @@
 """
 Loss Function Module
-Multi-task loss: Classification (CrossEntropy) + Regression (MSE) + Smoot        # Total loss with task weights
+Multi-task loss: Classification + Regression + Smooth        # Total loss with task weights
         total = self.alpha * loss_cls + self.beta * loss_reg
         if self.use_mstcn:
             total += self.gamma * loss_smooth

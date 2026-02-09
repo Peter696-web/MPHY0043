@@ -1,0 +1,18 @@
+# Core ML
+torch==2.0.1
+torchvision==0.15.2
+numpy
+transformers==5.0.0
+# Data Processing
+pandas
+scikit-learn
+scipy
+
+# Visualization
+matplotlib
+seaborn
+tqdm
+
+# Utilities
+PyYAML
+click

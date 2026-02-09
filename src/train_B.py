@@ -109,7 +109,7 @@ class TrainerB:
         print(f"Model parameters: {sum(p.numel() for p in self.model.parameters()):,}")
         
     def _build_model(self):
-        # Uses Task B model (No regression head)
+        # Uses Task B model 
         self.model = MSTCNSurgicalPredictor(
             feature_dim=self.config['feature_dim'],
             hidden_dim=self.config.get('mstcn_channels', 64),
@@ -117,7 +117,7 @@ class TrainerB:
             num_layers=self.config.get('mstcn_layers', 10),
             dropout=self.config['dropout'],
             num_phases=self.config['num_phases'],
-            use_external_time_input=self.config.get('use_external_time_input', True) # Typically True for Task B
+            use_external_time_input=self.config.get('use_external_time_input', True)
         )
         self.model = self.model.to(self.device)
         
@@ -130,7 +130,6 @@ class TrainerB:
             lr=self.config['learning_rate'],
             weight_decay=self.config['weight_decay']
         )
-        # Scheduler based on Accuracy or Loss (since no MAE)
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
             self.optimizer,
             mode='max', # Maximize F1/Acc
@@ -170,8 +169,6 @@ class TrainerB:
         for batch_idx, batch in enumerate(self.train_loader):
             features = batch['features'].to(self.device)
             targets = {'phase_id': batch['phase_id'].to(self.device)}
-            # No future_schedule needed for loss, but MetricCalculator might expect it
-            # We will handle MetricCalculator carefully
             
             predictions = self.model(features)
             loss_dict = self.criterion(predictions, targets)
@@ -185,9 +182,6 @@ class TrainerB:
             
             epoch_losses.append(loss_dict['total'].item())
             
-            # Metrics Update - Provide dummy schedule to avoid errors if MetricCalculator expects it
-            # Or better, MetricCalculator handles missing keys gracefully?
-            # Let's inspect `model/metrics.py`. Assuming it calculates Cls metrics if 'phase_logits' exists.
             metrics_calc.update(predictions, batch)
             
             if (batch_idx + 1) % self.config['print_freq'] == 0:

@@ -184,7 +184,6 @@ class MSTCNSurgicalPredictor(nn.Module):
         self.num_stages = num_stages
         
         # Adjust input dimension if using external time input (Task B)
-        # We assume external time input adds 14 channels (7 phases * 2 values)
         stage1_input_dim = feature_dim + (num_phases * 2 if use_external_time_input else 0)
         
         # MS-TCN backbone (phase classification)
@@ -198,7 +197,6 @@ class MSTCNSurgicalPredictor(nn.Module):
         )
         
         # Classification-only Task B:
-        # We removed the Regression branch entirely.
         # The external time input (if enabled) is handled via stage1_input_dim above.
         
     def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:

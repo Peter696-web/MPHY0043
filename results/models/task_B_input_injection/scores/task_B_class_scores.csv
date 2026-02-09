@@ -1,0 +1,8 @@
+Phase,Phase Name,F1 Score,Precision
+P0,Preparation,0.5928,0.7590
+P1,CalotTriangleDissection,0.8032,0.7195
+P2,ClippingCutting,0.2921,0.2870
+P3,GallbladderDissection,0.8212,0.9433
+P4,GallbladderPackaging,0.0664,0.1304
+P5,CleaningCoagulation,0.4062,0.2782
+P6,GallbladderRetraction,0.7293,0.7705
