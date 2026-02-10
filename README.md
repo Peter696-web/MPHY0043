@@ -3,7 +3,14 @@
 ## AI Usage Declaration
 This project was developed with the assistance of AI tools (e.g., GitHub Copilot, LLMs) for code generation, debugging, and documentation. 
 
-## 1. Directory Structure
+## 1. Environment
+Before running the code, please ensure all dependencies are installed. Refer to `requirements.txt` for the specific package versions.
+
+```bash
+pip install -r requirements.txt
+```
+
+## 2. Directory Structure
 
 ```
 MPHY0043/
@@ -29,7 +36,7 @@ MPHY0043/
 └── README.md
 ```
 
-## 2. Usage Workflow
+## 3. Usage Workflow
 
 ### Step 1: Data Preparation
 
@@ -136,11 +143,14 @@ python src/utils/visualize_video_B.py \
     --split test
 ```
 
-## 3. Environment
-Before running the code, please ensure all dependencies are installed. Refer to `requirements.txt` for the specific package versions.
+## Acknowledgements
 
-```bash
-pip install -r requirements.txt
-```
+Y. Abu Farha and J. Gall.
+MS-TCN: Multi-Stage Temporal Convolutional Network for Action Segmentation.
+In IEEE Conference on Computer Vision and Pattern Recognition (CVPR), 2019
+
+S. Li, Y. Abu Farha, Y. Liu, MM. Cheng,  and J. Gall.
+MS-TCN++: Multi-Stage Temporal Convolutional Network for Action Segmentation.
+In IEEE Transactions on Pattern Analysis and Machine Intelligence (TPAMI), 2020
 
 
